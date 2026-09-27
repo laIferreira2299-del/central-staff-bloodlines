@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Central da Staff · Bloodlines RP</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2C12 2 5 10 5 15a7 7 0 0 0 7 7Z' fill='%234F8DF5'/%3E%3Cpath d='M12 2c0 0 7 8 7 13a7 7 0 0 1-7 7Z' fill='%23E0529C'/%3E%3C/svg%3E">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.48.0/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/app.css">
+
+  <!-- Bibliotecas com versão fixa (SPEC 3.1). Nunca usar @latest. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "@supabase/supabase-js": "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/+esm",
+      "marked": "https://cdn.jsdelivr.net/npm/marked@18.0.14/lib/marked.esm.js",
+      "dompurify": "https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.es.mjs"
+    }
+  }
+  </script>
+  <script type="module" src="js/main.js"></script>
+</head>
+<body data-state="loading">
+  <a class="skip-link" href="#main">Pular para o conteúdo</a>
+
+  <header class="topbar">
+    <a class="brand" href="#/" aria-label="Bloodlines, Central da Staff: início">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <path class="brand-mark-blue" d="M12 2C12 2 5 10 5 15a7 7 0 0 0 7 7Z"/>
+        <path class="brand-mark-pink" d="M12 2c0 0 7 8 7 13a7 7 0 0 1-7 7Z"/>
+      </svg>
+      <span class="brand-name">Bloodlines</span>
+      <span class="brand-sep" aria-hidden="true">·</span>
+      <span class="brand-sub">Central da Staff</span>
+    </a>
+
+    <div class="search" role="search" data-focus-host>
+      <i class="ti ti-search search-icon" aria-hidden="true"></i>
+      <label class="sr-only" for="search-input">Buscar procedimentos</label>
+      <input id="search-input" class="search-input" type="search" autocomplete="off" spellcheck="false"
+             placeholder="Buscar procedimento, comando ou tag">
+      <kbd class="search-kbd" aria-hidden="true">Ctrl K</kbd>
+    </div>
+
+    <div class="user" id="user-slot"></div>
+  </header>
+
+  <div class="conn-banner" id="connection" role="status" hidden>
+    <i class="ti ti-wifi-off" aria-hidden="true"></i>
+    Sem conexão, alterações não serão salvas.
+  </div>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar" aria-label="Categorias"></aside>
+    <main class="main" id="main" tabindex="-1"></main>
+  </div>
+
+  <a class="fab" href="#/novo" aria-label="Novo procedimento"><i class="ti ti-plus" aria-hidden="true"></i></a>
+  <div class="toast-region" id="toast-region" role="status" aria-live="polite"></div>
+</body>
+</html>
