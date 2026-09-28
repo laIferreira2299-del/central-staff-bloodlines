@@ -9,16 +9,11 @@ import {
 } from './adapter.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
 import {
-  CEO, ROLE_CODES, canReadAudience, permissionChangesError, permissionsOf, roleLevel, staffChangeError,
+  CEO, ROLE_CODES, canReadAudience, permissionChangesError, roleLevel, staffChangeError,
 } from '../core/permissions.js';
 
 const STAFF_COLUMNS = 'discord_id, display_name, role, teams, active, created_at';
-// COMPATIBILIDADE (Etapa 1): banco ainda sem cargos e permissões (antes de rodar o SQL novo).
-// Remover junto com o modo `legacy` depois que o banco de produção estiver atualizado.
-const LEGACY_STAFF_COLUMNS = 'discord_id, display_name, role, active, created_at';
 
-/** A função não existe no banco (PostgREST PGRST202): banco anterior à Etapa 1. */
-const isMissingFunction = (error, status) => error?.code === 'PGRST202' || (status === 404 && /function/i.test(error?.message ?? ''));
 
 /** Perfil do banco → formato do contrato. */
 function toStaff(profile) {
@@ -97,9 +92,6 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
   });
 
   let names = new Map();
-  let identity = { userId: null, discordId: null };
-  let legacy = false;
-  const staffColumns = () => (legacy ? LEGACY_STAFF_COLUMNS : STAFF_COLUMNS);
   const withTeams = (m) => (m ? { ...m, teams: [...(m.teams ?? [])] } : m);
 
   async function session() {
@@ -108,41 +100,12 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     return data.session ?? null;
   }
 
-  /** Discord ID da sessão (identidade, não permissão; o banco confere de novo pela RLS). */
-  async function discordIdOf(s) {
-    if (identity.userId === s.user.id) return identity.discordId;
-    let id = toSession(s)?.user?.discord_id ?? null;
-    if (!id) {
-      const { data } = await sb.rpc('current_discord_id');
-      id = typeof data === 'string' ? data : null;
-    }
-    identity = { userId: s.user.id, discordId: id };
-    return id;
-  }
-
   async function currentStaff() {
     const s = await session();
     if (!s) return { error: fail('UNAUTHORIZED') };
     const { data, error, status } = await sb.rpc('current_staff_profile');
-    if (!error) {
-      legacy = false;
-      return { staff: toStaff(data) };
-    }
-    if (!isMissingFunction(error, status)) return { error: failFrom(error, status) };
-    return legacyStaff(s);
-  }
-
-  /** COMPATIBILIDADE (Etapa 1): banco antigo, só com os cargos suporte, moderador e admin. */
-  async function legacyStaff(s) {
-    legacy = true;
-    const discordId = await discordIdOf(s);
-    if (!discordId) return { staff: null };
-    // Filtra pelo próprio ID: admins enxergam toda a tabela (05_staff_admin.sql).
-    const { data, error, status } = await sb.from('staff_members')
-      .select('discord_id, display_name, role').eq('discord_id', discordId).eq('active', true).maybeSingle();
     if (error) return { error: failFrom(error, status) };
-    if (!data) return { staff: null };
-    return { staff: { ...data, level: roleLevel(data.role), teams: [], permissions: permissionsOf(data) } };
+    return { staff: toStaff(data) };
   }
 
   /**
@@ -203,8 +166,6 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
 
     async signOut() {
       names = new Map();
-      identity = { userId: null, discordId: null };
-      legacy = false;
       const { error } = await sb.auth.signOut();
       return error ? failFrom(error, error.status) : ok(null);
     },
@@ -408,7 +369,7 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     async listStaff() {
       const { error: g } = await guard('equipe.ver');
       if (g) return g;
-      const { data, error, status } = await sb.from('staff_members').select(staffColumns());
+      const { data, error, status } = await sb.from('staff_members').select(STAFF_COLUMNS);
       if (error) return failFrom(error, status);
       return ok(data.map(withTeams).sort(byStaffName));
     },
@@ -422,8 +383,7 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       // O último CEO só é conferido pelo banco (aqui não há a lista completa).
       const blocked = staffChangeError(staff, null, next);
       if (blocked) return validation({ _: blocked });
-      if (legacy) delete next.teams;
-      const { data, error, status } = await sb.from('staff_members').insert(next).select(staffColumns()).single();
+      const { data, error, status } = await sb.from('staff_members').insert(next).select(STAFF_COLUMNS).single();
       if (error?.code === '23505') return validation({ discord_id: 'Discord ID: já cadastrado na staff.' });
       if (error) return failFrom(error, status);
       names = new Map();
@@ -436,7 +396,7 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       const patch = pickStaffMember(changes, { partial: true });
       delete patch.discord_id;
       const { data: found, error: e, status: s } = await sb.from('staff_members')
-        .select(staffColumns()).eq('discord_id', discordId).maybeSingle();
+        .select(STAFF_COLUMNS).eq('discord_id', discordId).maybeSingle();
       if (e) return failFrom(e, s);
       if (!found) return fail('NOT_FOUND', 'Membro não encontrado.');
       const old = withTeams(found);
@@ -445,9 +405,8 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       if (!valid) return validation(errors);
       const blocked = staffChangeError(staff, old, next);
       if (blocked) return validation({ _: blocked });
-      if (legacy) delete patch.teams;
       const { data, error, status } = await sb.from('staff_members')
-        .update(patch).eq('discord_id', discordId).select(staffColumns()).single();
+        .update(patch).eq('discord_id', discordId).select(STAFF_COLUMNS).single();
       if (error) return failFrom(error, status);
       names = new Map();
       return ok(withTeams(data));
@@ -457,7 +416,7 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       const { staff, error: g } = await guard('equipe.gerenciar');
       if (g) return g;
       const { data: found, error: e, status: s } = await sb.from('staff_members')
-        .select(staffColumns()).eq('discord_id', discordId).maybeSingle();
+        .select(STAFF_COLUMNS).eq('discord_id', discordId).maybeSingle();
       if (e) return failFrom(e, s);
       if (!found) return fail('NOT_FOUND', 'Membro não encontrado.');
       const blocked = staffChangeError(staff, withTeams(found), 'delete');
@@ -494,7 +453,6 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
   };
 
   async function readGrid() {
-    if (legacy) return fail('FORBIDDEN', 'A tela de permissões funciona depois da atualização do banco (Etapa 1).');
     const [perms, rows] = await Promise.all([
       sb.from('permissions').select('code, description, ceo_only, default_roles, sort_order').order('sort_order'),
       sb.from('role_permissions').select('role, permission, allowed'),

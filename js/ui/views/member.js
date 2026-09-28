@@ -34,7 +34,7 @@ export function renderMember(app, discordId) {
     }
     title.textContent = m.display_name;
 
-    // Sem a grade (banco antigo), usa o padrão: a lista é só informativa, quem decide é o banco.
+    // Se a grade não carregar, usa o padrão: a lista é só informativa, quem decide é o banco.
     const perms = new Set(permissionsOf(m, grid.error ? undefined : grid.data.grid));
     const self = m.discord_id === app.state.staff.discord_id;
 
