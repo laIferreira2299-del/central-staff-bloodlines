@@ -18,7 +18,7 @@
 //
 // Códigos de erro (error.code)
 //   UNAUTHORIZED  sem sessão (não logado).
-//   FORBIDDEN     logado, mas o papel não permite a ação (tabela 2.2), ou não é staff.
+//   FORBIDDEN     logado, mas o cargo não tem a permissão da ação, ou não é staff.
 //   NOT_FOUND     registro inexistente (ou invisível para quem pediu).
 //   CONFLICT      updateProcedure com expectedVersion diferente da versão atual.
 //                 error.details = { current: Procedure, updated_by_name: string|null }.
@@ -26,23 +26,26 @@
 //                 (importAll: { items: [{ index, slug, errors }] }).
 //   NETWORK       sem conexão ou falha de comunicação.
 //
-// Permissões (tabela 2.2; o banco aplica via RLS, o mock simula)
-//   Ação                                   suporte  moderador  admin   não-staff  anônimo
-//   ler procedimentos / revisões           sim      sim        sim     lista []   UNAUTHORIZED
-//   listar favoritos próprios              sim      sim        sim     lista []   UNAUTHORIZED
-//   adicionar/remover favorito             sim      sim        sim     FORBIDDEN  UNAUTHORIZED
-//   criar / editar                         sim      sim        sim     FORBIDDEN  UNAUTHORIZED
-//   arquivar / restaurar status            não      sim        sim     FORBIDDEN  UNAUTHORIZED
-//   editar procedimento arquivado          não      sim        sim     FORBIDDEN  UNAUTHORIZED
-//   restaurar revisão                      não      sim        sim     FORBIDDEN  UNAUTHORIZED
-//   exportar / importar                    não      não        sim     FORBIDDEN  UNAUTHORIZED
-//   gerenciar a staff (listStaff etc.)     não      não        sim     FORBIDDEN  UNAUTHORIZED
-//   ("não" = FORBIDDEN)
+// Permissões (Etapa 1): cada ação exige uma permissão do catálogo em js/core/permissions.js.
+// O banco aplica via RLS e triggers (has_permission); o mock simula; o CEO tem todas.
+//   Ação                                   permissão exigida
+//   ler procedimentos / revisões           procedimentos.ler (todos os públicos) ou
+//                                          procedimentos.ler_allowlist (só público Allowlist;
+//                                          os outros ficam invisíveis: lista sem eles / NOT_FOUND)
+//   favoritos e markReviewed               procedimentos.favoritar
+//   criar / editar / setStatus 'revisar'   procedimentos.editar
+//   arquivar, restaurar, editar arquivado  procedimentos.arquivar (+ editar)
+//   restaurar revisão                      procedimentos.arquivar
+//   exportar / importar                    procedimentos.backup
+//   listStaff                              equipe.ver
+//   criar / editar / remover membro        equipe.gerenciar + travas da hierarquia (VALIDATION)
+//   Sem a permissão = FORBIDDEN. Padrão por cargo: documento 01-controle-da-staff, seção 2.
 //
-// Gerenciar a staff: o admin não pode remover, desativar nem tirar o cargo admin da
-// própria conta (VALIDATION). Assim sempre sobra pelo menos um admin ativo. O
-// discord_id não muda depois de criado (para trocar, remova e cadastre de novo).
-//
+// Travas da equipe (js/core/permissions.js, staffChangeError): ninguém altera o próprio
+// cargo, as próprias equipes, nem se desativa ou se remove; quem não é CEO só gerencia e
+// só atribui cargos abaixo do próprio nível e nunca a Direção (Administrador, Manager,
+// CEO); sempre sobra um CEO ativo. O discord_id não muda depois de criado.
+
 // Não-staff logado: listProcedures devolve [] (é o comportamento da RLS: o SELECT
 // simplesmente não retorna linhas); getProcedure devolve NOT_FOUND; escritas e
 // favoritos devolvem FORBIDDEN (o adapter confere se é staff antes de gravar);
@@ -56,9 +59,11 @@
  * @template T
  * @typedef {Promise<{ data: T, error: null } | { data: null, error: AdapterError }>} Result
  *
- * @typedef {'suporte'|'moderador'|'admin'} Role
- * @typedef {{ discord_id: string, display_name: string, role: Role }} Staff
- * @typedef {{ discord_id: string, display_name: string, role: Role, active: boolean, created_at: string }} StaffMember
+ * @typedef {'allowlist'|'lore'|'suporte'|'moderador'|'head_staff'|'admin'|'manager'|'ceo'} Role
+ * @typedef {'allowlist'|'lore'} Team
+ * @typedef {{ discord_id: string, display_name: string, role: Role, level: number, teams: Team[], permissions: string[] }} Staff
+ *           permissions = permissões efetivas (cargo + TAGs; CEO = todas), em ordem alfabética.
+ * @typedef {{ discord_id: string, display_name: string, role: Role, teams: Team[], active: boolean, created_at: string }} StaffMember
  * @typedef {{ user: { id: string, discord_id: string|null, name: string, avatar_url: string|null } }} Session
  *
  * @typedef {{ title: string, body: string }} Step
@@ -95,31 +100,32 @@
  * @property {(slug: string) => Result<Procedure>} getProcedure    Inclui arquivados.
  * @property {(data: object) => Result<Procedure>} createProcedure
  *           Valida (VALIDATION); slug repetido = VALIDATION em details.errors.slug.
- *           status padrão 'ativo'; criar já 'arquivado' exige moderador/admin.
+ *           status padrão 'ativo'; criar já 'arquivado' exige procedimentos.arquivar.
  * @property {(id: string, data: object, expectedVersion: number) => Result<Procedure>} updateProcedure
  *           Substitui os campos editáveis. Versão diferente = CONFLICT.
  *           Para "sobrescrever mesmo assim", chame de novo com a versão de details.current.
  * @property {(id: string, status: 'ativo'|'revisar'|'arquivado') => Result<Procedure>} setStatus
- *           Entrar ou sair de 'arquivado' exige moderador/admin.
+ *           Entrar ou sair de 'arquivado' exige procedimentos.arquivar.
  * @property {(id: string) => Result<Procedure>} markReviewed
  *           "Marcar como revisado hoje": last_reviewed_at = agora, last_reviewed_by = você.
  * @property {(procedureId: string) => Result<Revision[]>} listRevisions   Mais recente primeiro.
  * @property {(revisionId: string) => Result<Procedure>} restoreRevision
- *           Moderador/admin. Aplica o conteúdo da revisão como uma NOVA edição (gera revisão).
+ *           procedimentos.arquivar. Aplica o conteúdo da revisão como uma NOVA edição (gera revisão).
  * @property {() => Result<string[]>} listFavorites        IDs dos procedimentos favoritados por você.
  * @property {(procedureId: string) => Result<null>} addFavorite      Idempotente.
  * @property {(procedureId: string) => Result<null>} removeFavorite   Idempotente.
- * @property {() => Result<ExportPayload>} exportAll       Admin. Todos os procedimentos, inclusive arquivados.
+ * @property {() => Result<ExportPayload>} exportAll       procedimentos.backup. Todos os procedimentos, inclusive arquivados.
  * @property {(payload: ExportPayload, opts?: { dryRun?: boolean }) => Result<{ created: number, updated: number, unchanged: number }>} importAll
- *           Admin. Upsert por slug. Tudo ou nada: se um item for inválido, nada é gravado (VALIDATION).
+ *           procedimentos.backup. Upsert por slug. Tudo ou nada: se um item for inválido, nada é gravado (VALIDATION).
  *           dryRun = só calcula a prévia ("12 novos, 3 atualizados").
- * @property {() => Result<StaffMember[]>} listStaff        Admin. Todos (ativos e inativos), por nome.
- * @property {(member: { discord_id: string, display_name: string, role: Role, active?: boolean }) => Result<StaffMember>} createStaffMember
- *           Admin. discord_id repetido = VALIDATION em details.errors.discord_id. active padrão true.
- * @property {(discordId: string, changes: { display_name?: string, role?: Role, active?: boolean }) => Result<StaffMember>} updateStaffMember
- *           Admin. Altera nome, cargo e situação. A própria conta não perde admin nem é desativada (VALIDATION).
+ * @property {() => Result<StaffMember[]>} listStaff        equipe.ver. Todos (ativos e inativos), por nome.
+ * @property {(member: { discord_id: string, display_name: string, role: Role, teams?: Team[], active?: boolean }) => Result<StaffMember>} createStaffMember
+ *           equipe.gerenciar. discord_id repetido = VALIDATION em details.errors.discord_id. active padrão true, teams padrão [].
+ *           Cargo acima do permitido = VALIDATION em details.errors._.
+ * @property {(discordId: string, changes: { display_name?: string, role?: Role, teams?: Team[], active?: boolean }) => Result<StaffMember>} updateStaffMember
+ *           equipe.gerenciar. Altera nome, cargo, TAGs e situação, respeitando as travas (VALIDATION em details.errors._).
  * @property {(discordId: string) => Result<null>} deleteStaffMember
- *           Admin. Apaga o cadastro (o acesso acaba na hora). A própria conta não pode ser removida (VALIDATION).
+ *           equipe.gerenciar. Apaga o cadastro (o acesso acaba na hora). Travas = VALIDATION em details.errors._.
  *           O histórico dos procedimentos continua, mas o nome some; desativar preserva o nome.
  */
 
@@ -151,7 +157,7 @@ export const EXPORT_FORMAT = 'bloodlines-kb';
 
 const DEFAULT_MESSAGES = {
   UNAUTHORIZED: 'Faça login para continuar.',
-  FORBIDDEN: 'Seu papel não permite esta ação.',
+  FORBIDDEN: 'Seu cargo não permite esta ação.',
   NOT_FOUND: 'Registro não encontrado.',
   CONFLICT: 'Este procedimento foi alterado por outra pessoa enquanto você editava.',
   VALIDATION: 'Há campos inválidos.',
@@ -196,13 +202,6 @@ export function pickEditable(data = {}) {
   return out;
 }
 
-/** Mensagens da autoproteção do admin (as mesmas do trigger do banco, supabase/05_staff_admin.sql). */
-export const STAFF_SELF_ERRORS = Object.freeze({
-  delete: 'Você não pode remover a própria conta. Peça a outro admin.',
-  demote: 'Você não pode tirar o cargo admin da própria conta. Peça a outro admin.',
-  deactivate: 'Você não pode desativar a própria conta. Peça a outro admin.',
-});
-
 /**
  * Normaliza um membro da staff vindo do cliente (não valida; use validateStaffMember).
  * `partial`: mantém só os campos presentes (edição).
@@ -211,17 +210,12 @@ export function pickStaffMember(data = {}, { partial = false } = {}) {
   const src = data && typeof data === 'object' ? data : {};
   const out = {};
   for (const f of ['discord_id', 'display_name', 'role']) if (!partial || f in src) out[f] = str(src[f]);
+  if (!partial || 'teams' in src) {
+    const teams = src.teams ?? [];
+    out.teams = Array.isArray(teams) ? [...new Set(teams.map(str))].sort() : teams;
+  }
   if (!partial || 'active' in src) out.active = src.active ?? (partial ? src.active : true);
   return out;
-}
-
-/** Regra de autoproteção: devolve a mensagem de erro ou null. */
-export function staffSelfError(meId, targetId, changes) {
-  if (meId !== targetId) return null;
-  if (changes === 'delete') return STAFF_SELF_ERRORS.delete;
-  if ('role' in changes && changes.role !== 'admin') return STAFF_SELF_ERRORS.demote;
-  if ('active' in changes && changes.active !== true) return STAFF_SELF_ERRORS.deactivate;
-  return null;
 }
 
 export const byStaffName = (a, b) => a.display_name.localeCompare(b.display_name, 'pt-BR');

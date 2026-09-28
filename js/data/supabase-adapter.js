@@ -1,14 +1,35 @@
 // Implementação do contrato (js/data/adapter.js) sobre o Supabase.
 // A segurança de verdade é a RLS do banco (supabase/03_rls.sql); as checagens aqui
 // só dão respostas rápidas e mensagens claras, com os mesmos códigos do mock.
+// As permissões de quem está logado vêm do banco (RPC current_staff_profile).
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from '../config.js';
 import {
-  EDITABLE_FIELDS, EXPORT_FORMAT, PROCEDURE_DEFAULTS, byStaffName, fail, ok, pickEditable, pickStaffMember, staffSelfError,
+  EDITABLE_FIELDS, EXPORT_FORMAT, PROCEDURE_DEFAULTS, byStaffName, fail, ok, pickEditable, pickStaffMember,
 } from './adapter.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
+import { canReadAudience, permissionsOf, roleLevel, staffChangeError } from '../core/permissions.js';
 
-const STAFF_COLUMNS = 'discord_id, display_name, role, active, created_at';
+const STAFF_COLUMNS = 'discord_id, display_name, role, teams, active, created_at';
+// COMPATIBILIDADE (Etapa 1): banco ainda sem cargos e permissões (antes de rodar o SQL novo).
+// Remover junto com o modo `legacy` depois que o banco de produção estiver atualizado.
+const LEGACY_STAFF_COLUMNS = 'discord_id, display_name, role, active, created_at';
+
+/** A função não existe no banco (PostgREST PGRST202): banco anterior à Etapa 1. */
+const isMissingFunction = (error, status) => error?.code === 'PGRST202' || (status === 404 && /function/i.test(error?.message ?? ''));
+
+/** Perfil do banco → formato do contrato. */
+function toStaff(profile) {
+  if (!profile || typeof profile !== 'object') return null;
+  return {
+    discord_id: profile.discord_id,
+    display_name: profile.display_name,
+    role: profile.role,
+    level: profile.level ?? roleLevel(profile.role),
+    teams: [...(profile.teams ?? [])],
+    permissions: [...(profile.permissions ?? [])].sort(),
+  };
+}
 
 const byTitle = (a, b) => a.title.localeCompare(b.title, 'pt-BR');
 const editableOf = (p) => Object.fromEntries(EDITABLE_FIELDS.map((f) => [f, structuredClone(p[f])]));
@@ -75,6 +96,9 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
 
   let names = new Map();
   let identity = { userId: null, discordId: null };
+  let legacy = false;
+  const staffColumns = () => (legacy ? LEGACY_STAFF_COLUMNS : STAFF_COLUMNS);
+  const withTeams = (m) => (m ? { ...m, teams: [...(m.teams ?? [])] } : m);
 
   async function session() {
     const { data, error } = await sb.auth.getSession();
@@ -97,23 +121,39 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
   async function currentStaff() {
     const s = await session();
     if (!s) return { error: fail('UNAUTHORIZED') };
+    const { data, error, status } = await sb.rpc('current_staff_profile');
+    if (!error) {
+      legacy = false;
+      return { staff: toStaff(data) };
+    }
+    if (!isMissingFunction(error, status)) return { error: failFrom(error, status) };
+    return legacyStaff(s);
+  }
+
+  /** COMPATIBILIDADE (Etapa 1): banco antigo, só com os cargos suporte, moderador e admin. */
+  async function legacyStaff(s) {
+    legacy = true;
     const discordId = await discordIdOf(s);
     if (!discordId) return { staff: null };
     // Filtra pelo próprio ID: admins enxergam toda a tabela (05_staff_admin.sql).
     const { data, error, status } = await sb.from('staff_members')
       .select('discord_id, display_name, role').eq('discord_id', discordId).eq('active', true).maybeSingle();
     if (error) return { error: failFrom(error, status) };
-    return { staff: data ?? null };
+    if (!data) return { staff: null };
+    return { staff: { ...data, level: roleLevel(data.role), teams: [], permissions: permissionsOf(data) } };
   }
 
-  /** Garante sessão e (opcionalmente) papel. Devolve { staff } ou { error }. */
-  async function guard(level = 'staff') {
+  /**
+   * Garante sessão, cadastro na staff e (opcionalmente) uma permissão.
+   * Devolve { staff, can } ou { error }.
+   */
+  async function guard(need = 'staff') {
     const { staff, error } = await currentStaff();
     if (error) return { error };
     if (!staff) return { error: fail('FORBIDDEN') };
-    if (level === 'moderate' && !['moderador', 'admin'].includes(staff.role)) return { error: fail('FORBIDDEN') };
-    if (level === 'admin' && staff.role !== 'admin') return { error: fail('FORBIDDEN') };
-    return { staff };
+    const can = (code) => staff.permissions.includes(code);
+    if (need !== 'staff' && !can(need)) return { error: fail('FORBIDDEN') };
+    return { staff, can };
   }
 
   async function loadNames() {
@@ -162,6 +202,7 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     async signOut() {
       names = new Map();
       identity = { userId: null, discordId: null };
+      legacy = false;
       const { error } = await sb.auth.signOut();
       return error ? failFrom(error, error.status) : ok(null);
     },
@@ -212,12 +253,13 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     },
 
     async createProcedure(data) {
-      const { staff, error: g } = await guard();
+      const { staff, can, error: g } = await guard('procedimentos.editar');
       if (g) return g;
       const next = { ...PROCEDURE_DEFAULTS, ...pickEditable(data) };
-      if (next.status === 'arquivado' && !['moderador', 'admin'].includes(staff.role)) return fail('FORBIDDEN');
+      if (next.status === 'arquivado' && !can('procedimentos.arquivar')) return fail('FORBIDDEN');
       const { valid, errors } = validateProcedure(next);
       if (!valid) return validation(errors);
+      if (!canReadAudience(staff.permissions, next.audience)) return fail('FORBIDDEN');
       const { data: row, error, status } = await sb.from('procedures').insert(editableOf(next)).select('*').single();
       if (error) return failFrom(error, status);
       await loadNames();
@@ -225,17 +267,19 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     },
 
     async updateProcedure(id, data, expectedVersion) {
-      const { staff, error: g } = await guard();
+      const { staff, can, error: g } = await guard();
       if (g) return g;
       const { proc: old, error: e } = await fetchById(id);
       if (e) return e;
+      if (!can('procedimentos.editar')) return fail('FORBIDDEN');
       const next = { ...editableOf(old), ...pickEditable(data) };
       const touchesArchive = old.status === 'arquivado' || next.status === 'arquivado';
-      if (touchesArchive && !['moderador', 'admin'].includes(staff.role)) return fail('FORBIDDEN');
+      if (touchesArchive && !can('procedimentos.arquivar')) return fail('FORBIDDEN');
       if (!Number.isInteger(expectedVersion)) return validation({ version: 'Versão: informe a versão que você estava editando.' });
       if (expectedVersion !== old.version) return conflict(id);
       const { valid, errors } = validateProcedure(next);
       if (!valid) return validation(errors);
+      if (!canReadAudience(staff.permissions, next.audience)) return fail('FORBIDDEN');
       const { data: row, error, status } = await sb.from('procedures')
         .update({ ...editableOf(next), version: expectedVersion }).eq('id', id).select('*').single();
       if (error) return error.code === 'KB409' ? conflict(id) : failFrom(error, status);
@@ -244,12 +288,13 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     },
 
     async setStatus(id, statusValue) {
-      const { staff, error: g } = await guard();
+      const { can, error: g } = await guard();
       if (g) return g;
       const { proc: old, error: e } = await fetchById(id);
       if (e) return e;
+      if (!can('procedimentos.editar')) return fail('FORBIDDEN');
       if (!STATUSES.includes(statusValue)) return validation({ status: 'Status: use ativo, revisar ou arquivado.' });
-      if ((old.status === 'arquivado' || statusValue === 'arquivado') && !['moderador', 'admin'].includes(staff.role)) return fail('FORBIDDEN');
+      if ((old.status === 'arquivado' || statusValue === 'arquivado') && !can('procedimentos.arquivar')) return fail('FORBIDDEN');
       const { data: row, error, status } = await sb.from('procedures')
         .update({ status: statusValue, version: old.version }).eq('id', id).select('*').single();
       if (error) return failFrom(error, status);
@@ -277,7 +322,7 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     },
 
     async restoreRevision(revisionId) {
-      const { error: g } = await guard('moderate');
+      const { error: g } = await guard('procedimentos.arquivar');
       if (g) return g;
       const { data, error, status } = await sb.rpc('restore_revision', { p_revision_id: revisionId }).single();
       if (error) return failFrom(error, status);
@@ -294,10 +339,11 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     },
 
     async addFavorite(procedureId) {
-      const { error: g } = await guard();
+      const { can, error: g } = await guard();
       if (g) return g;
       const { proc, error: e } = await fetchById(procedureId);
       if (e || !proc) return e ?? fail('NOT_FOUND');
+      if (!can('procedimentos.favoritar')) return fail('FORBIDDEN');
       const { error, status } = await sb.from('favorites')
         .upsert({ procedure_id: procedureId }, { onConflict: 'user_id,procedure_id', ignoreDuplicates: true });
       return error ? failFrom(error, status) : ok(null);
@@ -311,7 +357,7 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     },
 
     async exportAll() {
-      const { error: g } = await guard('admin');
+      const { error: g } = await guard('procedimentos.backup');
       if (g) return g;
       const { data, error, status } = await sb.from('procedures').select('*');
       if (error) return failFrom(error, status);
@@ -319,8 +365,9 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     },
 
     async importAll(payload, { dryRun = false } = {}) {
-      const { error: g } = await guard('admin');
+      const { can, error: g } = await guard('procedimentos.backup');
       if (g) return g;
+      if (!can('procedimentos.editar')) return fail('FORBIDDEN');
       if (!payload || payload.format !== EXPORT_FORMAT || !Array.isArray(payload.procedures)) {
         return validation({ payload: `Arquivo: formato inválido (esperado "${EXPORT_FORMAT}" com a lista de procedimentos).` });
       }
@@ -357,51 +404,62 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
 
     /* ----- equipe (staff_members; RLS e trigger em supabase/05_staff_admin.sql) ----- */
     async listStaff() {
-      const { error: g } = await guard('admin');
+      const { error: g } = await guard('equipe.ver');
       if (g) return g;
-      const { data, error, status } = await sb.from('staff_members').select(STAFF_COLUMNS);
+      const { data, error, status } = await sb.from('staff_members').select(staffColumns());
       if (error) return failFrom(error, status);
-      return ok(data.sort(byStaffName));
+      return ok(data.map(withTeams).sort(byStaffName));
     },
 
     async createStaffMember(member) {
-      const { error: g } = await guard('admin');
+      const { staff, error: g } = await guard('equipe.gerenciar');
       if (g) return g;
       const next = pickStaffMember(member);
       const { valid, errors } = validateStaffMember(next);
       if (!valid) return validation(errors);
-      const { data, error, status } = await sb.from('staff_members').insert(next).select(STAFF_COLUMNS).single();
+      // O último CEO só é conferido pelo banco (aqui não há a lista completa).
+      const blocked = staffChangeError(staff, null, next);
+      if (blocked) return validation({ _: blocked });
+      if (legacy) delete next.teams;
+      const { data, error, status } = await sb.from('staff_members').insert(next).select(staffColumns()).single();
       if (error?.code === '23505') return validation({ discord_id: 'Discord ID: já cadastrado na staff.' });
       if (error) return failFrom(error, status);
       names = new Map();
-      return ok(data);
+      return ok(withTeams(data));
     },
 
     async updateStaffMember(discordId, changes) {
-      const { staff, error: g } = await guard('admin');
+      const { staff, error: g } = await guard('equipe.gerenciar');
       if (g) return g;
       const patch = pickStaffMember(changes, { partial: true });
       delete patch.discord_id;
-      const { data: old, error: e, status: s } = await sb.from('staff_members')
-        .select(STAFF_COLUMNS).eq('discord_id', discordId).maybeSingle();
+      const { data: found, error: e, status: s } = await sb.from('staff_members')
+        .select(staffColumns()).eq('discord_id', discordId).maybeSingle();
       if (e) return failFrom(e, s);
-      if (!old) return fail('NOT_FOUND', 'Membro não encontrado.');
-      const { valid, errors } = validateStaffMember({ ...old, ...patch });
+      if (!found) return fail('NOT_FOUND', 'Membro não encontrado.');
+      const old = withTeams(found);
+      const next = { ...old, ...patch };
+      const { valid, errors } = validateStaffMember(next);
       if (!valid) return validation(errors);
-      const self = staffSelfError(staff.discord_id, discordId, patch);
-      if (self) return validation({ _: self });
+      const blocked = staffChangeError(staff, old, next);
+      if (blocked) return validation({ _: blocked });
+      if (legacy) delete patch.teams;
       const { data, error, status } = await sb.from('staff_members')
-        .update(patch).eq('discord_id', discordId).select(STAFF_COLUMNS).single();
+        .update(patch).eq('discord_id', discordId).select(staffColumns()).single();
       if (error) return failFrom(error, status);
       names = new Map();
-      return ok(data);
+      return ok(withTeams(data));
     },
 
     async deleteStaffMember(discordId) {
-      const { staff, error: g } = await guard('admin');
+      const { staff, error: g } = await guard('equipe.gerenciar');
       if (g) return g;
-      const self = staffSelfError(staff.discord_id, discordId, 'delete');
-      if (self) return validation({ _: self });
+      const { data: found, error: e, status: s } = await sb.from('staff_members')
+        .select(staffColumns()).eq('discord_id', discordId).maybeSingle();
+      if (e) return failFrom(e, s);
+      if (!found) return fail('NOT_FOUND', 'Membro não encontrado.');
+      const blocked = staffChangeError(staff, withTeams(found), 'delete');
+      if (blocked) return validation({ _: blocked });
       const { data, error, status } = await sb.from('staff_members')
         .delete().eq('discord_id', discordId).select('discord_id');
       if (error) return failFrom(error, status);

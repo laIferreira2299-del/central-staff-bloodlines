@@ -46,7 +46,7 @@ export function renderHistory(app, slug) {
         h('div', { class: 'rev-view-head' },
           h('p', { class: 'rev-view-title' },
             entry.current ? `Versão ${entry.version} (atual)` : `Versão ${entry.version} · somente leitura`),
-          !entry.current && app.can('restoreRevision') && h('button', {
+          !entry.current && app.can('procedimentos.arquivar') && h('button', {
             type: 'button', class: 'btn btn--sm', id: 'restore-revision', 'data-requires-online': '',
             onclick: () => restore(entry),
           }, icon('rotate-clockwise'), 'Restaurar esta versão')),

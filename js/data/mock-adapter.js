@@ -1,22 +1,32 @@
 // Implementação em memória do contrato (js/data/adapter.js), com persistência opcional
-// em localStorage. SIMULA as regras do banco: papéis (2.2), conflito de versão (2.7),
-// revisões automáticas (2.8), arquivamento em vez de exclusão e auditoria pelo "servidor".
+// em localStorage. SIMULA as regras do banco: cargos e permissões (js/core/permissions.js),
+// público visível por cargo, travas da equipe, conflito de versão (2.7), revisões
+// automáticas (2.8), arquivamento em vez de exclusão e auditoria pelo "servidor".
 // Uso: desenvolvimento local (DATA_MODE = 'mock') e testes.
 import {
-  EDITABLE_FIELDS, EXPORT_FORMAT, PROCEDURE_DEFAULTS, byStaffName, fail, ok, pickEditable, pickStaffMember, staffSelfError,
+  EDITABLE_FIELDS, EXPORT_FORMAT, PROCEDURE_DEFAULTS, byStaffName, fail, ok, pickEditable, pickStaffMember,
 } from './adapter.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
+import { CEO, canReadAudience, defaultGrid, permissionsOf, roleLevel, staffChangeError } from '../core/permissions.js';
 
-/** Usuários simulados. `role: null` = logado mas não cadastrado em staff_members. */
+/**
+ * Usuários simulados: um por cargo (a chave é o código do cargo), mais um staff inativo e um
+ * logado não cadastrado (`role: null`).
+ */
 export const MOCK_USERS = Object.freeze({
+  allowlist: { id: 'mock-u-allowlist', discord_id: '100000000000000005', name: 'Allowlist Teste', role: 'allowlist', active: true },
+  lore: { id: 'mock-u-lore', discord_id: '100000000000000006', name: 'Lore Teste', role: 'lore', active: true },
   suporte: { id: 'mock-u-suporte', discord_id: '100000000000000001', name: 'Suporte Teste', role: 'suporte', active: true },
   moderador: { id: 'mock-u-moderador', discord_id: '100000000000000002', name: 'Moderador Teste', role: 'moderador', active: true },
+  head_staff: { id: 'mock-u-head', discord_id: '100000000000000007', name: 'Head Staff Teste', role: 'head_staff', active: true },
   admin: { id: 'mock-u-admin', discord_id: '100000000000000003', name: 'Admin Teste', role: 'admin', active: true },
+  manager: { id: 'mock-u-manager', discord_id: '100000000000000008', name: 'Manager Teste', role: 'manager', active: true },
+  ceo: { id: 'mock-u-ceo', discord_id: '100000000000000010', name: 'CEO Teste', role: 'ceo', active: true },
   inativo: { id: 'mock-u-inativo', discord_id: '100000000000000004', name: 'Ex-staff Teste', role: 'moderador', active: false },
   naostaff: { id: 'mock-u-naostaff', discord_id: '100000000000000009', name: 'Visitante Teste', role: null, active: false },
 });
 
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 const clone = (v) => structuredClone(v);
 const byTitle = (a, b) => a.title.localeCompare(b.title, 'pt-BR');
 const uuid = () => globalThis.crypto.randomUUID();
@@ -24,7 +34,7 @@ const uuid = () => globalThis.crypto.randomUUID();
 function initialState(seed, adminId, nowIso) {
   const staff = Object.values(MOCK_USERS)
     .filter((u) => u.role)
-    .map((u) => ({ discord_id: u.discord_id, display_name: u.name, role: u.role, active: u.active, created_at: nowIso }));
+    .map((u) => ({ discord_id: u.discord_id, display_name: u.name, role: u.role, teams: [], active: u.active, created_at: nowIso }));
   const procedures = seed.map((item) => ({
     id: uuid(),
     ...PROCEDURE_DEFAULTS,
@@ -35,7 +45,7 @@ function initialState(seed, adminId, nowIso) {
     created_by: adminId, created_at: nowIso,
     updated_by: adminId, updated_at: nowIso,
   }));
-  return { v: STATE_VERSION, staff, procedures, revisions: [], favorites: [] };
+  return { v: STATE_VERSION, staff, procedures, revisions: [], favorites: [], grid: defaultGrid() };
 }
 
 /**
@@ -87,7 +97,7 @@ export function createMockAdapter({
   const sessionOf = (u) => (u ? { user: { id: u.id, discord_id: u.discord_id, name: u.name, avatar_url: null } } : null);
   const staffOf = (u) => (u ? state.staff.find((s) => s.discord_id === u.discord_id && s.active) ?? null : null);
   const nameOf = (discordId) => state.staff.find((s) => s.discord_id === discordId)?.display_name ?? null;
-  const canModerate = (staff) => staff?.role === 'moderador' || staff?.role === 'admin';
+  const permsOf = (staff) => permissionsOf(staff, state.grid);
 
   function notify() {
     const session = sessionOf(currentUser());
@@ -95,11 +105,12 @@ export function createMockAdapter({
   }
 
   /**
-   * Executa uma operação respeitando: rede, sessão e papel.
-   * level: 'session' (só exige login) | 'staff' | 'moderate' | 'admin'
+   * Executa uma operação respeitando: rede, sessão e permissão.
+   * need: 'session' (só exige login) | 'staff' | código de permissão (ex.: 'procedimentos.backup')
    * Para não-staff, `nonStaff` define a resposta (ex.: lista vazia, como a RLS faria).
+   * `fn` recebe { user, staff, can(código), sees(procedimento) }.
    */
-  async function run(method, level, fn, { nonStaff } = {}) {
+  async function run(method, need, fn, { nonStaff } = {}) {
     if (offline) return fail('NETWORK');
     const forced = pendingFailures.get(method);
     if (forced) { pendingFailures.delete(method); return fail(forced); }
@@ -110,11 +121,13 @@ export function createMockAdapter({
     const u = currentUser();
     if (!u) return fail('UNAUTHORIZED');
     const staff = staffOf(u);
-    if (level !== 'session' && !staff) return nonStaff ? nonStaff() : fail('FORBIDDEN');
-    if (level === 'moderate' && !canModerate(staff)) return fail('FORBIDDEN');
-    if (level === 'admin' && staff.role !== 'admin') return fail('FORBIDDEN');
+    if (need !== 'session' && !staff) return nonStaff ? nonStaff() : fail('FORBIDDEN');
+    const perms = permsOf(staff);
+    const can = (code) => perms.includes(code);
+    if (need !== 'session' && need !== 'staff' && !can(need)) return fail('FORBIDDEN');
+    const sees = (p) => Boolean(p) && canReadAudience(perms, p.audience);
     try {
-      return await fn({ user: u, staff });
+      return await fn({ user: u, staff, can, sees });
     } catch (err) {
       return fail('NETWORK', `Erro inesperado: ${err?.message ?? err}`);
     }
@@ -130,8 +143,10 @@ export function createMockAdapter({
   }
   const editableOf = (p) => Object.fromEntries(EDITABLE_FIELDS.map((f) => [f, clone(p[f])]));
   const presentStaff = (s) => ({
-    discord_id: s.discord_id, display_name: s.display_name, role: s.role, active: s.active, created_at: s.created_at ?? null,
+    discord_id: s.discord_id, display_name: s.display_name, role: s.role, teams: [...(s.teams ?? [])],
+    active: s.active, created_at: s.created_at ?? null,
   });
+  const notFound = () => fail('NOT_FOUND', 'Procedimento não encontrado.');
   const findById = (id) => state.procedures.find((p) => p.id === id);
   const slugTaken = (slug, exceptId) => state.procedures.some((p) => p.slug === slug && p.id !== exceptId);
 
@@ -169,6 +184,7 @@ export function createMockAdapter({
   }
 
   const touchesArchive = (from, to) => from === 'arquivado' || to === 'arquivado';
+  const otherActiveCeos = (discordId) => state.staff.filter((s) => s.role === CEO && s.active && s.discord_id !== discordId).length;
 
   const adapter = {
     /* ----- sessão ----- */
@@ -201,34 +217,38 @@ export function createMockAdapter({
     async getCurrentStaff() {
       return run('getCurrentStaff', 'session', async ({ user }) => {
         const staff = staffOf(user);
-        return ok(staff ? { discord_id: staff.discord_id, display_name: staff.display_name, role: staff.role } : null);
+        return ok(staff ? {
+          discord_id: staff.discord_id, display_name: staff.display_name, role: staff.role,
+          level: roleLevel(staff.role), teams: [...(staff.teams ?? [])], permissions: permsOf(staff),
+        } : null);
       });
     },
 
     /* ----- leitura ----- */
     async listProcedures({ includeArchived = false } = {}) {
-      return run('listProcedures', 'staff', async () => ok(
+      return run('listProcedures', 'staff', async ({ sees }) => ok(
         state.procedures
-          .filter((p) => includeArchived || p.status !== 'arquivado')
+          .filter((p) => sees(p) && (includeArchived || p.status !== 'arquivado'))
           .sort(byTitle)
           .map(present),
       ), { nonStaff: () => ok([]) });
     },
 
     async getProcedure(slug) {
-      return run('getProcedure', 'staff', async () => {
+      return run('getProcedure', 'staff', async ({ sees }) => {
         const p = state.procedures.find((x) => x.slug === slug);
-        return p ? ok(present(p)) : fail('NOT_FOUND', 'Procedimento não encontrado.');
-      }, { nonStaff: () => fail('NOT_FOUND', 'Procedimento não encontrado.') });
+        return sees(p) ? ok(present(p)) : notFound();
+      }, { nonStaff: notFound });
     },
 
     /* ----- escrita ----- */
     async createProcedure(data) {
-      return run('createProcedure', 'staff', async ({ staff }) => {
+      return run('createProcedure', 'procedimentos.editar', async ({ staff, can, sees }) => {
         const next = { ...PROCEDURE_DEFAULTS, ...pickEditable(data) };
-        if (next.status === 'arquivado' && !canModerate(staff)) return fail('FORBIDDEN');
+        if (next.status === 'arquivado' && !can('procedimentos.arquivar')) return fail('FORBIDDEN');
         const invalid = check(next);
         if (invalid) return invalid;
+        if (!sees(next)) return fail('FORBIDDEN');
         const at = nowIso();
         const proc = {
           id: uuid(),
@@ -246,11 +266,12 @@ export function createMockAdapter({
     },
 
     async updateProcedure(id, data, expectedVersion) {
-      return run('updateProcedure', 'staff', async ({ staff }) => {
+      return run('updateProcedure', 'staff', async ({ staff, can, sees }) => {
         const old = findById(id);
-        if (!old) return fail('NOT_FOUND', 'Procedimento não encontrado.');
+        if (!sees(old)) return notFound();
+        if (!can('procedimentos.editar')) return fail('FORBIDDEN');
         const next = { ...editableOf(old), ...pickEditable(data) };
-        if (touchesArchive(old.status, next.status) && !canModerate(staff)) return fail('FORBIDDEN');
+        if (touchesArchive(old.status, next.status) && !can('procedimentos.arquivar')) return fail('FORBIDDEN');
         if (!Number.isInteger(expectedVersion)) {
           return validationError({ version: 'Versão: informe a versão que você estava editando.' });
         }
@@ -262,45 +283,49 @@ export function createMockAdapter({
         }
         const invalid = check(next, old.id);
         if (invalid) return invalid;
+        if (!sees(next)) return fail('FORBIDDEN');
         return ok(present(commit(old, editableOf(next), staff)));
       });
     },
 
     async setStatus(id, status) {
-      return run('setStatus', 'staff', async ({ staff }) => {
+      return run('setStatus', 'staff', async ({ staff, can, sees }) => {
         const old = findById(id);
-        if (!old) return fail('NOT_FOUND', 'Procedimento não encontrado.');
+        if (!sees(old)) return notFound();
+        if (!can('procedimentos.editar')) return fail('FORBIDDEN');
         if (!STATUSES.includes(status)) return validationError({ status: 'Status: use ativo, revisar ou arquivado.' });
-        if (touchesArchive(old.status, status) && !canModerate(staff)) return fail('FORBIDDEN');
+        if (touchesArchive(old.status, status) && !can('procedimentos.arquivar')) return fail('FORBIDDEN');
         return ok(present(commit(old, { status }, staff)));
       });
     },
 
     async markReviewed(id) {
-      return run('markReviewed', 'staff', async ({ staff }) => {
+      return run('markReviewed', 'staff', async ({ staff, can, sees }) => {
         const old = findById(id);
-        if (!old) return fail('NOT_FOUND', 'Procedimento não encontrado.');
-        if (old.status === 'arquivado' && !canModerate(staff)) return fail('FORBIDDEN');
+        if (!sees(old)) return notFound();
+        if (!can('procedimentos.favoritar')) return fail('FORBIDDEN');
+        if (old.status === 'arquivado' && !can('procedimentos.arquivar')) return fail('FORBIDDEN');
         return ok(present(commit(old, { last_reviewed_at: nowIso(), last_reviewed_by: staff.discord_id }, staff)));
       });
     },
 
     /* ----- histórico ----- */
     async listRevisions(procedureId) {
-      return run('listRevisions', 'staff', async () => ok(
+      return run('listRevisions', 'staff', async ({ sees }) => ok(
         state.revisions
-          .filter((r) => r.procedure_id === procedureId)
+          .filter((r) => r.procedure_id === procedureId && sees(findById(procedureId)) && sees(r.snapshot))
           .sort((a, b) => b.version - a.version)
           .map((r) => ({ ...clone(r), snapshot: present(r.snapshot), changed_by_name: nameOf(r.changed_by) })),
       ), { nonStaff: () => ok([]) });
     },
 
     async restoreRevision(revisionId) {
-      return run('restoreRevision', 'moderate', async ({ staff }) => {
+      return run('restoreRevision', 'procedimentos.arquivar', async ({ staff, can, sees }) => {
         const rev = state.revisions.find((r) => r.id === revisionId);
-        if (!rev) return fail('NOT_FOUND', 'Revisão não encontrada.');
+        if (!rev || !sees(rev.snapshot)) return fail('NOT_FOUND', 'Revisão não encontrada.');
         const old = findById(rev.procedure_id);
-        if (!old) return fail('NOT_FOUND', 'Procedimento não encontrado.');
+        if (!sees(old)) return notFound();
+        if (!can('procedimentos.editar')) return fail('FORBIDDEN');
         const next = editableOf(rev.snapshot);
         const invalid = check(next, old.id);
         if (invalid) return invalid;
@@ -316,8 +341,9 @@ export function createMockAdapter({
     },
 
     async addFavorite(procedureId) {
-      return run('addFavorite', 'staff', async ({ user }) => {
-        if (!findById(procedureId)) return fail('NOT_FOUND', 'Procedimento não encontrado.');
+      return run('addFavorite', 'staff', async ({ user, can, sees }) => {
+        if (!sees(findById(procedureId))) return notFound();
+        if (!can('procedimentos.favoritar')) return fail('FORBIDDEN');
         if (!state.favorites.some((f) => f.user_id === user.id && f.procedure_id === procedureId)) {
           state.favorites.push({ user_id: user.id, procedure_id: procedureId, created_at: nowIso() });
           save();
@@ -337,7 +363,7 @@ export function createMockAdapter({
 
     /* ----- exportação / importação ----- */
     async exportAll() {
-      return run('exportAll', 'admin', async () => ok({
+      return run('exportAll', 'procedimentos.backup', async () => ok({
         format: EXPORT_FORMAT,
         version: 1,
         exported_at: nowIso(),
@@ -346,7 +372,8 @@ export function createMockAdapter({
     },
 
     async importAll(payload, { dryRun = false } = {}) {
-      return run('importAll', 'admin', async ({ staff }) => {
+      return run('importAll', 'procedimentos.backup', async ({ staff, can }) => {
+        if (!can('procedimentos.editar')) return fail('FORBIDDEN');
         if (!payload || payload.format !== EXPORT_FORMAT || !Array.isArray(payload.procedures)) {
           return validationError({ payload: `Arquivo: formato inválido (esperado "${EXPORT_FORMAT}" com a lista de procedimentos).` });
         }
@@ -390,14 +417,16 @@ export function createMockAdapter({
 
     /* ----- equipe (staff_members) ----- */
     async listStaff() {
-      return run('listStaff', 'admin', async () => ok([...state.staff].sort(byStaffName).map(presentStaff)));
+      return run('listStaff', 'equipe.ver', async () => ok([...state.staff].sort(byStaffName).map(presentStaff)));
     },
 
     async createStaffMember(data) {
-      return run('createStaffMember', 'admin', async () => {
+      return run('createStaffMember', 'equipe.gerenciar', async ({ staff }) => {
         const next = pickStaffMember(data);
         const { valid, errors } = validateStaffMember(next);
         if (!valid) return validationError(errors);
+        const blocked = staffChangeError(staff, null, next);
+        if (blocked) return validationError({ _: blocked });
         if (state.staff.some((s) => s.discord_id === next.discord_id)) {
           return validationError({ discord_id: 'Discord ID: já cadastrado na staff.' });
         }
@@ -409,7 +438,7 @@ export function createMockAdapter({
     },
 
     async updateStaffMember(discordId, changes) {
-      return run('updateStaffMember', 'admin', async ({ staff }) => {
+      return run('updateStaffMember', 'equipe.gerenciar', async ({ staff }) => {
         const member = state.staff.find((s) => s.discord_id === discordId);
         if (!member) return fail('NOT_FOUND', 'Membro não encontrado.');
         const patch = pickStaffMember(changes, { partial: true });
@@ -417,8 +446,8 @@ export function createMockAdapter({
         const next = { ...member, ...patch };
         const { valid, errors } = validateStaffMember(next);
         if (!valid) return validationError(errors);
-        const self = staffSelfError(staff.discord_id, discordId, patch);
-        if (self) return validationError({ _: self });
+        const blocked = staffChangeError(staff, member, next, otherActiveCeos(discordId));
+        if (blocked) return validationError({ _: blocked });
         Object.assign(member, patch);
         save();
         return ok(presentStaff(member));
@@ -426,10 +455,11 @@ export function createMockAdapter({
     },
 
     async deleteStaffMember(discordId) {
-      return run('deleteStaffMember', 'admin', async ({ staff }) => {
-        if (!state.staff.some((s) => s.discord_id === discordId)) return fail('NOT_FOUND', 'Membro não encontrado.');
-        const self = staffSelfError(staff.discord_id, discordId, 'delete');
-        if (self) return validationError({ _: self });
+      return run('deleteStaffMember', 'equipe.gerenciar', async ({ staff }) => {
+        const member = state.staff.find((s) => s.discord_id === discordId);
+        if (!member) return fail('NOT_FOUND', 'Membro não encontrado.');
+        const blocked = staffChangeError(staff, member, 'delete', otherActiveCeos(discordId));
+        if (blocked) return validationError({ _: blocked });
         state.staff = state.staff.filter((s) => s.discord_id !== discordId);
         save();
         return ok(null);

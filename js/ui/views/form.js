@@ -42,13 +42,17 @@ const storage = {
 
 export function renderForm(app, { slug } = {}) {
   const editing = Boolean(slug);
+  if (!app.can('procedimentos.editar')) {
+    renderMessage(app, { title: 'Acesso restrito', text: 'Seu cargo não permite criar nem editar procedimentos.' });
+    return null;
+  }
   const original = editing ? app.bySlug(slug) : null;
   if (editing && !original) {
     renderMessage(app, { title: 'Procedimento não encontrado', text: 'Não há o que editar neste endereço.' });
     return null;
   }
-  if (editing && original.status === 'arquivado' && !app.can('archive')) {
-    renderMessage(app, { title: 'Procedimento arquivado', text: 'Só moderadores e admins podem editar procedimentos arquivados.' });
+  if (editing && original.status === 'arquivado' && !app.can('procedimentos.arquivar')) {
+    renderMessage(app, { title: 'Procedimento arquivado', text: 'Seu cargo não permite editar procedimentos arquivados.' });
     return null;
   }
 
@@ -144,7 +148,7 @@ export function renderForm(app, { slug } = {}) {
   }
 
   const statusOptions = Object.entries(STATUS_LABELS)
-    .filter(([v]) => v !== 'arquivado' || app.can('archive') || draft.status === 'arquivado');
+    .filter(([v]) => v !== 'arquivado' || app.can('procedimentos.arquivar') || draft.status === 'arquivado');
 
   function mount() {
     form.replaceChildren(

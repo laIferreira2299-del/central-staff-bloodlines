@@ -9,7 +9,6 @@ export const AUDIENCES = {
   allowlist: { label: 'Allowlist' },
 };
 
-export const ROLES = { suporte: 'Suporte', moderador: 'Moderador', admin: 'Admin' };
 export const STATUS_LABELS = { ativo: 'Ativo', revisar: 'Revisar', arquivado: 'Arquivado' };
 
 const REVIEW_MAX_DAYS = 90;

@@ -1,4 +1,4 @@
-// Exportação e importação (SPEC 2.9). Só admin (o adapter também bloqueia).
+// Exportação e importação (SPEC 2.9). Permissão procedimentos.backup (o adapter também bloqueia).
 import { downloadText, h, icon, toast } from '../dom.js';
 import { confirmDialog } from '../modal.js';
 import { exportToMarkdown } from '../../core/export-md.js';
@@ -7,8 +7,8 @@ import { renderMessage } from './message.js';
 const today = () => new Date().toISOString().slice(0, 10);
 
 export function renderAdmin(app) {
-  if (!app.can('admin')) {
-    renderMessage(app, { title: 'Acesso restrito', text: 'Exportar e importar é exclusivo de admins.' });
+  if (!app.can('procedimentos.backup')) {
+    renderMessage(app, { title: 'Acesso restrito', text: 'Seu cargo não permite exportar e importar procedimentos.' });
     return null;
   }
 

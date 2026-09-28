@@ -1,5 +1,6 @@
 // Telas sem acesso ao conteúdo: carregando, login e "Acesso restrito" (SPEC 2.1).
 import { h, icon, toast } from '../dom.js';
+import { ROLE_LIST } from '../../core/permissions.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -31,9 +32,7 @@ export function renderLoading(app) {
 
 export function renderLogin(app) {
   const roleSelect = app.isMock && h('select', { id: 'mock-role', class: 'input' },
-    h('option', { value: 'admin' }, 'Admin'),
-    h('option', { value: 'moderador' }, 'Moderador'),
-    h('option', { value: 'suporte' }, 'Suporte'),
+    [...ROLE_LIST].reverse().map((r) => h('option', { value: r.code, selected: r.code === 'admin' }, r.label)),
     h('option', { value: 'naostaff' }, 'Não cadastrado na staff'));
 
   const button = h('button', { type: 'button', class: 'btn btn--primary btn--lg btn--block', id: 'login-btn' },

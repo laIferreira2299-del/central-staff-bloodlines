@@ -545,7 +545,7 @@ body[data-route="new"] .fab, body[data-route="edit"] .fab, body[data-route="staf
 body:not([data-state="app"]) .topbar { grid-template-columns: auto; }
 
 .role-badge { font-size: var(--fs-xs); color: var(--text-2); }
-.role-badge--admin, .role-badge--moderador { color: var(--text); }
+.role-badge--moderador, .role-badge--head_staff, .role-badge--admin, .role-badge--manager, .role-badge--ceo { color: var(--text); }
 
 button:disabled, .btn:disabled, .icon-btn:disabled { opacity: .45; cursor: not-allowed; }
 

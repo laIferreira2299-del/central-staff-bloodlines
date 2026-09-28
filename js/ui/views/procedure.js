@@ -140,11 +140,12 @@ export function renderProcedurePage(app, slug) {
         h('span', {}, icon('pencil'), `Versão ${proc.version} · editado em ${formatDate(proc.updated_at)}`,
           proc.updated_by_name ? ` por ${proc.updated_by_name}` : '')),
       h('div', { class: 'proc-actions' },
-        (!archived || app.can('archive')) && h('a', { class: 'btn', href: `#/editar/${proc.slug}` }, icon('pencil'), 'Editar'),
+        app.can('procedimentos.editar') && (!archived || app.can('procedimentos.arquivar'))
+          && h('a', { class: 'btn', href: `#/editar/${proc.slug}` }, icon('pencil'), 'Editar'),
         h('a', { class: 'btn', href: `#/historico/${proc.slug}` }, icon('history'), 'Histórico'),
-        !archived && h('button', { type: 'button', class: 'btn', 'data-requires-online': '', onclick: markReviewed },
+        !archived && app.can('procedimentos.favoritar') && h('button', { type: 'button', class: 'btn', 'data-requires-online': '', onclick: markReviewed },
           icon('circle-check'), 'Marcar como revisado hoje'),
-        app.can('archive') && (archived
+        app.can('procedimentos.arquivar') && app.can('procedimentos.editar') && (archived
           ? h('button', { type: 'button', class: 'btn', 'data-requires-online': '', onclick: unarchive }, icon('rotate-clockwise'), 'Restaurar')
           : h('button', { type: 'button', class: 'btn btn--danger', 'data-requires-online': '', onclick: archive }, icon('archive'), 'Arquivar')))),
   ));

@@ -43,12 +43,12 @@ export function createApp(adapter, { isMock = false } = {}) {
   const app = {
     adapter, state, router, els, isMock,
 
-    /** Permissões na interface (o banco/adapter aplica de verdade). */
-    can(action) {
-      const role = state.staff?.role;
-      if (action === 'archive' || action === 'restoreRevision') return role === 'moderador' || role === 'admin';
-      if (action === 'admin') return role === 'admin';
-      return Boolean(role);
+    /**
+     * Permissões na interface, pelo código do catálogo (js/core/permissions.js),
+     * ex.: app.can('procedimentos.arquivar'). O banco/adapter aplica de verdade.
+     */
+    can(permission) {
+      return Boolean(state.staff?.permissions?.includes(permission));
     },
 
     bySlug: (slug) => state.procedures.find((p) => p.slug === slug) ?? null,
@@ -151,7 +151,7 @@ export function createApp(adapter, { isMock = false } = {}) {
   function reportError(error, fallback = 'Algo deu errado.') {
     const messages = {
       NETWORK: 'Sem conexão. As alterações não foram salvas.',
-      FORBIDDEN: 'Seu papel não permite esta ação.',
+      FORBIDDEN: 'Seu cargo não permite esta ação.',
       UNAUTHORIZED: 'Sua sessão expirou. Entre novamente.',
       NOT_FOUND: 'Não encontrado. Ele pode ter sido arquivado ou renomeado.',
     };

@@ -1,5 +1,6 @@
 // Validação de procedimento (SPEC 2.3). Função pura; o banco repete as regras com constraints.
 import { SLUG_MAX, SLUG_PATTERN } from './slug.js';
+import { ROLE_CODES, TEAMS } from './permissions.js';
 
 /** Lista controlada de categorias (aprovada no inventário, docs/INVENTARIO.md seção 2). */
 export const CATEGORIES = Object.freeze([
@@ -162,14 +163,14 @@ export function validateProcedure(p) {
   return { valid: Object.keys(errors).length === 0, errors };
 }
 
-/** Papéis da staff (staff_members.role). */
-export const STAFF_ROLES = Object.freeze(['suporte', 'moderador', 'admin']);
+/** Cargos da staff (staff_members.role), do menor para o maior nível. */
+export const STAFF_ROLES = ROLE_CODES;
 export const DISCORD_ID_PATTERN = /^[0-9]{17,20}$/;
 export const STAFF_NAME_MAX = 80;
 
 /**
  * Valida um membro da staff (mesmas regras dos CHECKs de staff_members).
- * @param {{ discord_id?: any, display_name?: any, role?: any, active?: any }} m
+ * @param {{ discord_id?: any, display_name?: any, role?: any, teams?: any, active?: any }} m
  * @returns {{ valid: boolean, errors: Record<string, string> }}
  */
 export function validateStaffMember(m) {
@@ -180,7 +181,10 @@ export function validateStaffMember(m) {
   }
   if (isBlank(m.display_name)) errors.display_name = 'Nome: obrigatório.';
   else if (len(m.display_name) > STAFF_NAME_MAX) errors.display_name = `Nome: máximo de ${STAFF_NAME_MAX} caracteres.`;
-  if (!STAFF_ROLES.includes(m.role)) errors.role = 'Cargo: use suporte, moderador ou admin.';
+  if (!STAFF_ROLES.includes(m.role)) errors.role = 'Cargo: escolha um cargo da lista.';
+  if (m.teams != null && (!Array.isArray(m.teams) || m.teams.some((t) => !TEAMS.includes(t)))) {
+    errors.teams = 'Equipes: use só Equipe de Allowlist e Equipe de Lore.';
+  }
   if (typeof m.active !== 'boolean') errors.active = 'Situação: escolha ativo ou inativo.';
   return { valid: Object.keys(errors).length === 0, errors };
 }

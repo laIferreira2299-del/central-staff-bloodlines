@@ -1,17 +1,27 @@
-// Equipe (staff_members): admins adicionam, editam e removem membros.
+// Equipe (staff_members): quem tem equipe.ver vê a lista; quem tem equipe.gerenciar
+// adiciona, edita e remove membros de cargo abaixo do permitido (js/core/permissions.js).
 // O banco confere tudo de novo (RLS + trigger em supabase/05_staff_admin.sql).
 import { h, icon, toast } from '../dom.js';
 import { confirmDialog } from '../modal.js';
-import { ROLES, formatDate } from '../components.js';
-import { STAFF_NAME_MAX, STAFF_ROLES, validateStaffMember } from '../../core/validate.js';
+import { formatDate } from '../components.js';
+import { STAFF_NAME_MAX, validateStaffMember } from '../../core/validate.js';
+import { assignableRoles, canManageRole, roleLabel, roleLevel } from '../../core/permissions.js';
 import { pickStaffMember } from '../../data/adapter.js';
 import { renderMessage } from './message.js';
 import { renderUser } from './layout.js';
 
-const ROLE_BADGE = { suporte: 'badge--suporte', moderador: 'badge--moderador', admin: 'badge--ambos' };
 const FIELDS = ['discord_id', 'display_name', 'role', 'active'];
 
-const roleBadge = (role) => h('span', { class: `badge ${ROLE_BADGE[role] ?? ''}` }, ROLES[role] ?? role);
+/** Cor do selo por faixa de nível (a Etapa 2 troca por um selo com cor por cargo). */
+function roleBadgeClass(role) {
+  const level = roleLevel(role);
+  if (level <= 2) return 'badge--allowlist';
+  if (level === 3) return 'badge--suporte';
+  if (level === 4) return 'badge--moderador';
+  return 'badge--ambos';
+}
+
+const roleBadge = (role) => h('span', { class: `badge ${roleBadgeClass(role)}` }, roleLabel(role));
 const statusBadge = (active) => h('span', { class: `badge ${active ? 'badge--status' : 'badge--revisar'}` }, active ? 'Ativo' : 'Inativo');
 
 function field(id, label, control, hint) {
@@ -23,8 +33,12 @@ function field(id, label, control, hint) {
     h('p', { class: 'field-error', id: `${id}-err`, hidden: true }));
 }
 
-const roleSelect = (id, value, disabled) => h('select', { id, class: 'input', disabled },
-  STAFF_ROLES.map((r) => h('option', { value: r, selected: r === value }, ROLES[r])));
+/** Seletor de cargo: só os cargos que `options` permite (o atual aparece mesmo se não puder dar). */
+function roleSelect(id, value, disabled, options) {
+  const roles = options.includes(value) || !value ? options : [value, ...options];
+  return h('select', { id, class: 'input', disabled },
+    roles.map((r) => h('option', { value: r, selected: r === value }, roleLabel(r))));
+}
 
 const activeSelect = (id, value, disabled) => h('select', { id, class: 'input', disabled },
   h('option', { value: 'true', selected: value }, 'Ativo'),
@@ -57,12 +71,16 @@ function showErrors(form, prefix, errors) {
 const generalError = () => h('p', { class: 'field-error form-general-error', role: 'alert', tabindex: '-1', hidden: true });
 
 export function renderStaff(app) {
-  if (!app.can('admin')) {
-    renderMessage(app, { title: 'Acesso restrito', text: 'Gerenciar a equipe é exclusivo de admins.' });
+  if (!app.can('equipe.ver')) {
+    renderMessage(app, { title: 'Acesso restrito', text: 'Seu cargo não permite ver a equipe.' });
     return null;
   }
 
   const meId = app.state.staff.discord_id;
+  const myRole = app.state.staff.role;
+  const manages = app.can('equipe.gerenciar');
+  const assignable = manages ? assignableRoles(myRole) : [];
+  const canTouch = (m) => manages && (m.discord_id === meId || canManageRole(myRole, m.role));
   let members = [];
   let editing = null;
   let alive = true;
@@ -77,7 +95,7 @@ export function renderStaff(app) {
         h('input', { id: 'new-discord_id', class: 'input input--mono', inputmode: 'numeric', autocomplete: 'off', spellcheck: 'false', maxlength: 20 }),
         'No Discord: Configurações, Avançado, Modo Desenvolvedor. Depois clique com o botão direito no perfil e em Copiar ID.'),
       field('new-display_name', 'Nome', h('input', { id: 'new-display_name', class: 'input', autocomplete: 'off', maxlength: STAFF_NAME_MAX })),
-      field('new-role', 'Cargo', roleSelect('new-role', 'suporte', false)),
+      field('new-role', 'Cargo', roleSelect('new-role', assignable.includes('suporte') ? 'suporte' : assignable[0], false, assignable)),
       field('new-active', 'Situação', activeSelect('new-active', true, false))),
     generalError(),
     h('div', { class: 'panel-actions' },
@@ -107,7 +125,7 @@ export function renderStaff(app) {
     }
     showErrors(addForm, 'new', {});
     addForm.reset();
-    toast(`${result.data.display_name} adicionado(a) como ${ROLES[result.data.role]}.`, 3000);
+    toast(`${result.data.display_name} adicionado(a) como ${roleLabel(result.data.role)}.`, 3000);
     await load(result.data.discord_id);
     addForm.querySelector('#new-discord_id').focus();
   });
@@ -122,7 +140,7 @@ export function renderStaff(app) {
           h('span', { class: 'sr-only' }, 'Discord ID: '), h('code', { class: 'staff-id' }, m.discord_id),
           m.created_at && ` · desde ${formatDate(m.created_at)}`)),
       h('div', { class: 'staff-tags' }, roleBadge(m.role), statusBadge(m.active)),
-      h('div', { class: 'staff-actions' },
+      canTouch(m) && h('div', { class: 'staff-actions' },
         h('button', {
           type: 'button', class: 'btn btn--sm', 'data-requires-online': '', 'data-focus-key': `edit-${m.discord_id}`,
           'aria-label': `Editar ${m.display_name}`, onclick: () => startEdit(m.discord_id),
@@ -139,8 +157,8 @@ export function renderStaff(app) {
       h('p', { class: 'staff-meta' }, 'Discord ID ', h('code', { class: 'staff-id' }, m.discord_id), ' (não muda; para trocar, remova e cadastre de novo)'),
       h('div', { class: 'staff-form-grid' },
         field('edit-display_name', 'Nome', h('input', { id: 'edit-display_name', class: 'input', value: m.display_name, autocomplete: 'off', maxlength: STAFF_NAME_MAX })),
-        field('edit-role', 'Cargo', roleSelect('edit-role', m.role, self), self ? 'Seu cargo só pode ser alterado por outro admin.' : null),
-        field('edit-active', 'Situação', activeSelect('edit-active', m.active, self), self ? 'Sua conta só pode ser desativada por outro admin.' : null)),
+        field('edit-role', 'Cargo', roleSelect('edit-role', m.role, self, assignable), self ? 'Seu cargo só pode ser alterado por outra pessoa da Direção.' : null),
+        field('edit-active', 'Situação', activeSelect('edit-active', m.active, self), self ? 'Sua conta só pode ser desativada por outra pessoa da Direção.' : null)),
       generalError(),
       h('div', { class: 'panel-actions' },
         h('button', { type: 'submit', class: 'btn btn--primary btn--sm', 'data-requires-online': '' }, icon('check'), 'Salvar'),
@@ -220,9 +238,11 @@ export function renderStaff(app) {
     h('a', { class: 'back', href: '#/' }, icon('arrow-left'), 'Voltar para a lista'),
     h('header', { class: 'page-head' },
       h('h1', { class: 'page-title', tabindex: '-1' }, 'Equipe da staff'),
-      h('p', { class: 'page-sub' }, 'Quem pode entrar na Central e com qual cargo. Exclusivo de admins.')),
+      h('p', { class: 'page-sub' }, manages
+        ? 'Quem pode entrar na Central e com qual cargo. Você gerencia os cargos abaixo do seu; Administradores, Managers e CEOs só o CEO gerencia.'
+        : 'Quem pode entrar na Central e com qual cargo.')),
 
-    h('section', { class: 'panel', 'aria-labelledby': 'staff-add-title' },
+    manages && h('section', { class: 'panel', 'aria-labelledby': 'staff-add-title' },
       h('h2', { class: 'block-title', id: 'staff-add-title' }, icon('user-plus'), 'Adicionar membro'),
       addForm),
 

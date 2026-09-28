@@ -69,12 +69,12 @@ export function renderHome(app) {
           query
             ? h('p', {}, 'Nenhum procedimento encontrado para ', h('em', {}, query), '.')
             : h('p', {}, 'Nenhum procedimento com esses filtros.'),
-          query
+          query && app.can('procedimentos.editar')
             ? h('a', {
               class: 'btn btn--primary', href: '#/novo',
               onclick: () => { state.prefillTitle = query; },
             }, icon('plus'), 'Cadastrar este procedimento')
-            : h('button', { type: 'button', class: 'btn', onclick: () => app.clearFilters() }, icon('filter-off'), 'Limpar filtros')));
+            : app.hasFilters() && h('button', { type: 'button', class: 'btn', onclick: () => app.clearFilters() }, icon('filter-off'), 'Limpar filtros')));
   } else {
     const favorites = visible.filter((p) => app.isFav(p)).sort(byTitle);
     const review = visible.filter((p) => needsReview(p)).sort(byTitle);
@@ -91,7 +91,7 @@ export function renderHome(app) {
       groups.map(([name, list], i) => section(app, { id: `cat-${i}`, title: name, list })),
       visible.length === 0 && h('div', { class: 'empty empty--action' },
         h('p', {}, 'Nenhum procedimento cadastrado ainda.'),
-        h('a', { class: 'btn btn--primary', href: '#/novo' }, icon('plus'), 'Cadastrar o primeiro')),
+        app.can('procedimentos.editar') && h('a', { class: 'btn btn--primary', href: '#/novo' }, icon('plus'), 'Cadastrar o primeiro')),
     ];
   }
 
