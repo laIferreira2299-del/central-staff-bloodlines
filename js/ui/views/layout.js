@@ -16,6 +16,8 @@ export function renderUser(app) {
     h('div', { class: 'user-info' },
       h('span', { class: 'user-name' }, name),
       h('span', { class: `role-badge role-badge--${staff?.role}` }, ROLES[staff?.role] ?? '')),
+    app.can('admin') && h('a', { class: 'icon-btn', href: '#/equipe', id: 'nav-staff', 'aria-label': 'Equipe da staff', title: 'Equipe da staff' },
+      icon('users')),
     app.can('admin') && h('a', { class: 'icon-btn', href: '#/admin', 'aria-label': 'Exportar e importar', title: 'Exportar e importar' },
       icon('database-export')),
     h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Sair', title: 'Sair', onclick: () => app.signOut() },
@@ -54,5 +56,10 @@ export function renderSidebar(app) {
         'aria-current': String(filters.status === 'arquivado'),
         onclick: () => app.setFilters({ status: filters.status === 'arquivado' ? '' : 'arquivado' }),
       }, h('span', { class: 'cat-label' }, 'Arquivados'), h('span', { class: 'cat-count' }, archivedCount))),
+    app.can('admin') && h('nav', { class: 'sidebar-tools', 'aria-labelledby': 'sidebar-admin-title' },
+      h('h2', { class: 'sidebar-title', id: 'sidebar-admin-title' }, 'Administração'),
+      [['#/equipe', 'users', 'Equipe da staff'], ['#/admin', 'database-export', 'Exportar e importar']].map(([href, ico, label]) =>
+        h('a', { class: 'cat-item', href, 'data-nav': '', 'aria-current': String(app.router.route.hash === href) },
+          h('span', { class: 'cat-label' }, icon(ico), ' ', label)))),
   );
 }

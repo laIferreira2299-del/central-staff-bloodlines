@@ -3,9 +3,9 @@
 // revisões automáticas (2.8), arquivamento em vez de exclusão e auditoria pelo "servidor".
 // Uso: desenvolvimento local (DATA_MODE = 'mock') e testes.
 import {
-  EDITABLE_FIELDS, EXPORT_FORMAT, PROCEDURE_DEFAULTS, fail, ok, pickEditable,
+  EDITABLE_FIELDS, EXPORT_FORMAT, PROCEDURE_DEFAULTS, byStaffName, fail, ok, pickEditable, pickStaffMember, staffSelfError,
 } from './adapter.js';
-import { STATUSES, validateProcedure } from '../core/validate.js';
+import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
 
 /** Usuários simulados. `role: null` = logado mas não cadastrado em staff_members. */
 export const MOCK_USERS = Object.freeze({
@@ -24,7 +24,7 @@ const uuid = () => globalThis.crypto.randomUUID();
 function initialState(seed, adminId, nowIso) {
   const staff = Object.values(MOCK_USERS)
     .filter((u) => u.role)
-    .map((u) => ({ discord_id: u.discord_id, display_name: u.name, role: u.role, active: u.active }));
+    .map((u) => ({ discord_id: u.discord_id, display_name: u.name, role: u.role, active: u.active, created_at: nowIso }));
   const procedures = seed.map((item) => ({
     id: uuid(),
     ...PROCEDURE_DEFAULTS,
@@ -129,6 +129,9 @@ export function createMockAdapter({
     return out;
   }
   const editableOf = (p) => Object.fromEntries(EDITABLE_FIELDS.map((f) => [f, clone(p[f])]));
+  const presentStaff = (s) => ({
+    discord_id: s.discord_id, display_name: s.display_name, role: s.role, active: s.active, created_at: s.created_at ?? null,
+  });
   const findById = (id) => state.procedures.find((p) => p.id === id);
   const slugTaken = (slug, exceptId) => state.procedures.some((p) => p.slug === slug && p.id !== exceptId);
 
@@ -382,6 +385,54 @@ export function createMockAdapter({
         }
         save();
         return ok(summary);
+      });
+    },
+
+    /* ----- equipe (staff_members) ----- */
+    async listStaff() {
+      return run('listStaff', 'admin', async () => ok([...state.staff].sort(byStaffName).map(presentStaff)));
+    },
+
+    async createStaffMember(data) {
+      return run('createStaffMember', 'admin', async () => {
+        const next = pickStaffMember(data);
+        const { valid, errors } = validateStaffMember(next);
+        if (!valid) return validationError(errors);
+        if (state.staff.some((s) => s.discord_id === next.discord_id)) {
+          return validationError({ discord_id: 'Discord ID: já cadastrado na staff.' });
+        }
+        const member = { ...next, created_at: nowIso() };
+        state.staff.push(member);
+        save();
+        return ok(presentStaff(member));
+      });
+    },
+
+    async updateStaffMember(discordId, changes) {
+      return run('updateStaffMember', 'admin', async ({ staff }) => {
+        const member = state.staff.find((s) => s.discord_id === discordId);
+        if (!member) return fail('NOT_FOUND', 'Membro não encontrado.');
+        const patch = pickStaffMember(changes, { partial: true });
+        delete patch.discord_id;
+        const next = { ...member, ...patch };
+        const { valid, errors } = validateStaffMember(next);
+        if (!valid) return validationError(errors);
+        const self = staffSelfError(staff.discord_id, discordId, patch);
+        if (self) return validationError({ _: self });
+        Object.assign(member, patch);
+        save();
+        return ok(presentStaff(member));
+      });
+    },
+
+    async deleteStaffMember(discordId) {
+      return run('deleteStaffMember', 'admin', async ({ staff }) => {
+        if (!state.staff.some((s) => s.discord_id === discordId)) return fail('NOT_FOUND', 'Membro não encontrado.');
+        const self = staffSelfError(staff.discord_id, discordId, 'delete');
+        if (self) return validationError({ _: self });
+        state.staff = state.staff.filter((s) => s.discord_id !== discordId);
+        save();
+        return ok(null);
       });
     },
   };

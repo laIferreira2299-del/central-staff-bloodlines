@@ -8,6 +8,7 @@ const ROUTES = [
   ['edit', /^#\/editar\/([a-z0-9-]+)$/],
   ['history', /^#\/historico\/([a-z0-9-]+)$/],
   ['admin', /^#\/admin$/],
+  ['staff', /^#\/equipe$/],
 ];
 
 /** @returns {{ name: string, slug?: string, hash: string }} */

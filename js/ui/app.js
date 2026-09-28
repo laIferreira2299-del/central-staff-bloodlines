@@ -10,6 +10,7 @@ import { renderProcedurePage } from './views/procedure.js';
 import { renderForm } from './views/form.js';
 import { renderHistory } from './views/history.js';
 import { renderAdmin } from './views/admin.js';
+import { renderStaff } from './views/staff.js';
 import { renderMessage } from './views/message.js';
 
 const SEARCH_DEBOUNCE_MS = 150;
@@ -169,10 +170,12 @@ export function createApp(adapter, { isMock = false } = {}) {
       edit: () => renderForm(app, { slug: route.slug }),
       history: () => renderHistory(app, route.slug),
       admin: () => renderAdmin(app),
+      staff: () => renderStaff(app),
       notfound: () => renderMessage(app, { title: 'Página não encontrada', text: 'Volte para a lista de procedimentos.' }),
     };
     const mount = () => {
       document.body.dataset.route = route.name;
+      markNavLinks(route.hash);
       viewCleanup = views[route.name]?.() ?? null;
       if (typeof viewCleanup !== 'function') viewCleanup = null;
       app.applyOnline();
@@ -197,6 +200,11 @@ export function createApp(adapter, { isMock = false } = {}) {
     if (route.name !== 'new') {
       app.reload().then((changed) => { if (changed && router.route.hash === hash) app.render(); });
     }
+  }
+
+  /** Destaca, na barra lateral, o link da página atual (ex.: Equipe). */
+  function markNavLinks(hash) {
+    for (const a of els.sidebar.querySelectorAll('a[data-nav]')) a.setAttribute('aria-current', String(a.getAttribute('href') === hash));
   }
 
   /** Apaga da memória e da tela tudo que veio do banco (ao sair ou sem acesso). */

@@ -541,7 +541,7 @@ body:not([data-state="app"]) .fab,
 body:not([data-state="app"]) .layout::before { display: none; }
 body:not([data-state="app"]) .layout { grid-template-columns: minmax(0, 1fr); }
 /* No formulário, o botão flutuante "+" cobriria o Salvar. */
-body[data-route="new"] .fab, body[data-route="edit"] .fab { display: none; }
+body[data-route="new"] .fab, body[data-route="edit"] .fab, body[data-route="staff"] .fab { display: none; }
 body:not([data-state="app"]) .topbar { grid-template-columns: auto; }
 
 .role-badge { font-size: var(--fs-xs); color: var(--text-2); }
@@ -821,6 +821,35 @@ input[type="file"].input::file-selector-button {
   border-radius: var(--radius-sm);
   font: inherit; font-size: var(--fs-sm); font-weight: 600;
   cursor: pointer;
+}
+
+/* ---------- Equipe (staff_members) ---------- */
+.staff-form { display: grid; gap: var(--space-4); }
+.staff-form-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, .8fr) minmax(0, .8fr); gap: var(--space-4); align-items: start; }
+.staff-list { display: grid; gap: var(--space-2); }
+.staff-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.staff-row--editing { grid-template-columns: minmax(0, 1fr); border-color: var(--blue-border); }
+.staff-who { min-width: 0; }
+.staff-name { font-weight: 600; overflow-wrap: anywhere; }
+.staff-you { color: var(--text-2); font-weight: 500; }
+.staff-meta { color: var(--text-2); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.staff-id { font-family: var(--font-mono); }
+.staff-tags, .staff-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.sidebar-tools .cat-label .ti { font-size: 16px; vertical-align: -2px; }
+
+@media (max-width: 1199.98px) {
+  .staff-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 899.98px) {
+  .staff-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .staff-row { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+  .staff-actions .btn { flex: 1 1 auto; }
 }
 
 /* ---------- Login e acesso restrito ---------- */

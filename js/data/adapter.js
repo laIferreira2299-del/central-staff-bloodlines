@@ -36,7 +36,12 @@
 //   editar procedimento arquivado          não      sim        sim     FORBIDDEN  UNAUTHORIZED
 //   restaurar revisão                      não      sim        sim     FORBIDDEN  UNAUTHORIZED
 //   exportar / importar                    não      não        sim     FORBIDDEN  UNAUTHORIZED
+//   gerenciar a staff (listStaff etc.)     não      não        sim     FORBIDDEN  UNAUTHORIZED
 //   ("não" = FORBIDDEN)
+//
+// Gerenciar a staff: o admin não pode remover, desativar nem tirar o cargo admin da
+// própria conta (VALIDATION). Assim sempre sobra pelo menos um admin ativo. O
+// discord_id não muda depois de criado (para trocar, remova e cadastre de novo).
 //
 // Não-staff logado: listProcedures devolve [] (é o comportamento da RLS: o SELECT
 // simplesmente não retorna linhas); getProcedure devolve NOT_FOUND; escritas e
@@ -53,6 +58,7 @@
  *
  * @typedef {'suporte'|'moderador'|'admin'} Role
  * @typedef {{ discord_id: string, display_name: string, role: Role }} Staff
+ * @typedef {{ discord_id: string, display_name: string, role: Role, active: boolean, created_at: string }} StaffMember
  * @typedef {{ user: { id: string, discord_id: string|null, name: string, avatar_url: string|null } }} Session
  *
  * @typedef {{ title: string, body: string }} Step
@@ -107,6 +113,14 @@
  * @property {(payload: ExportPayload, opts?: { dryRun?: boolean }) => Result<{ created: number, updated: number, unchanged: number }>} importAll
  *           Admin. Upsert por slug. Tudo ou nada: se um item for inválido, nada é gravado (VALIDATION).
  *           dryRun = só calcula a prévia ("12 novos, 3 atualizados").
+ * @property {() => Result<StaffMember[]>} listStaff        Admin. Todos (ativos e inativos), por nome.
+ * @property {(member: { discord_id: string, display_name: string, role: Role, active?: boolean }) => Result<StaffMember>} createStaffMember
+ *           Admin. discord_id repetido = VALIDATION em details.errors.discord_id. active padrão true.
+ * @property {(discordId: string, changes: { display_name?: string, role?: Role, active?: boolean }) => Result<StaffMember>} updateStaffMember
+ *           Admin. Altera nome, cargo e situação. A própria conta não perde admin nem é desativada (VALIDATION).
+ * @property {(discordId: string) => Result<null>} deleteStaffMember
+ *           Admin. Apaga o cadastro (o acesso acaba na hora). A própria conta não pode ser removida (VALIDATION).
+ *           O histórico dos procedimentos continua, mas o nome some; desativar preserva o nome.
  */
 
 export const ERROR_CODES = Object.freeze({
@@ -124,6 +138,7 @@ export const ADAPTER_METHODS = Object.freeze([
   'listRevisions', 'restoreRevision',
   'listFavorites', 'addFavorite', 'removeFavorite',
   'exportAll', 'importAll',
+  'listStaff', 'createStaffMember', 'updateStaffMember', 'deleteStaffMember',
 ]);
 
 /** Campos que o cliente pode definir. Todo o resto é do servidor. */
@@ -180,6 +195,36 @@ export function pickEditable(data = {}) {
   }
   return out;
 }
+
+/** Mensagens da autoproteção do admin (as mesmas do trigger do banco, supabase/05_staff_admin.sql). */
+export const STAFF_SELF_ERRORS = Object.freeze({
+  delete: 'Você não pode remover a própria conta. Peça a outro admin.',
+  demote: 'Você não pode tirar o cargo admin da própria conta. Peça a outro admin.',
+  deactivate: 'Você não pode desativar a própria conta. Peça a outro admin.',
+});
+
+/**
+ * Normaliza um membro da staff vindo do cliente (não valida; use validateStaffMember).
+ * `partial`: mantém só os campos presentes (edição).
+ */
+export function pickStaffMember(data = {}, { partial = false } = {}) {
+  const src = data && typeof data === 'object' ? data : {};
+  const out = {};
+  for (const f of ['discord_id', 'display_name', 'role']) if (!partial || f in src) out[f] = str(src[f]);
+  if (!partial || 'active' in src) out.active = src.active ?? (partial ? src.active : true);
+  return out;
+}
+
+/** Regra de autoproteção: devolve a mensagem de erro ou null. */
+export function staffSelfError(meId, targetId, changes) {
+  if (meId !== targetId) return null;
+  if (changes === 'delete') return STAFF_SELF_ERRORS.delete;
+  if ('role' in changes && changes.role !== 'admin') return STAFF_SELF_ERRORS.demote;
+  if ('active' in changes && changes.active !== true) return STAFF_SELF_ERRORS.deactivate;
+  return null;
+}
+
+export const byStaffName = (a, b) => a.display_name.localeCompare(b.display_name, 'pt-BR');
 
 /** Valores padrão de um procedimento novo. */
 export const PROCEDURE_DEFAULTS = Object.freeze({

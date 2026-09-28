@@ -3,8 +3,12 @@
 // só dão respostas rápidas e mensagens claras, com os mesmos códigos do mock.
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from '../config.js';
-import { EDITABLE_FIELDS, EXPORT_FORMAT, PROCEDURE_DEFAULTS, fail, ok, pickEditable } from './adapter.js';
-import { STATUSES, validateProcedure } from '../core/validate.js';
+import {
+  EDITABLE_FIELDS, EXPORT_FORMAT, PROCEDURE_DEFAULTS, byStaffName, fail, ok, pickEditable, pickStaffMember, staffSelfError,
+} from './adapter.js';
+import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
+
+const STAFF_COLUMNS = 'discord_id, display_name, role, active, created_at';
 
 const byTitle = (a, b) => a.title.localeCompare(b.title, 'pt-BR');
 const editableOf = (p) => Object.fromEntries(EDITABLE_FIELDS.map((f) => [f, structuredClone(p[f])]));
@@ -28,6 +32,7 @@ export function mapError(error, status) {
   const message = error.message ?? '';
   if (code === 'KB409') return { code: 'CONFLICT' };
   if (code === 'KB404' || code === 'PGRST116') return { code: 'NOT_FOUND' };
+  if (code === 'KB422') return { code: 'VALIDATION', details: { errors: { _: message } } };
   if (code === '42501' || status === 403) return { code: 'FORBIDDEN' };
   if (status === 401 || code === 'PGRST301' || /JWT/i.test(message)) return { code: 'UNAUTHORIZED' };
   if (code === '23505') return { code: 'VALIDATION', details: { errors: { slug: 'Slug: já existe outro procedimento com este endereço.' } } };
@@ -69,6 +74,7 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
   });
 
   let names = new Map();
+  let identity = { userId: null, discordId: null };
 
   async function session() {
     const { data, error } = await sb.auth.getSession();
@@ -76,11 +82,26 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     return data.session ?? null;
   }
 
+  /** Discord ID da sessão (identidade, não permissão; o banco confere de novo pela RLS). */
+  async function discordIdOf(s) {
+    if (identity.userId === s.user.id) return identity.discordId;
+    let id = toSession(s)?.user?.discord_id ?? null;
+    if (!id) {
+      const { data } = await sb.rpc('current_discord_id');
+      id = typeof data === 'string' ? data : null;
+    }
+    identity = { userId: s.user.id, discordId: id };
+    return id;
+  }
+
   async function currentStaff() {
     const s = await session();
     if (!s) return { error: fail('UNAUTHORIZED') };
+    const discordId = await discordIdOf(s);
+    if (!discordId) return { staff: null };
+    // Filtra pelo próprio ID: admins enxergam toda a tabela (05_staff_admin.sql).
     const { data, error, status } = await sb.from('staff_members')
-      .select('discord_id, display_name, role').eq('active', true).maybeSingle();
+      .select('discord_id, display_name, role').eq('discord_id', discordId).eq('active', true).maybeSingle();
     if (error) return { error: failFrom(error, status) };
     return { staff: data ?? null };
   }
@@ -140,6 +161,7 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
 
     async signOut() {
       names = new Map();
+      identity = { userId: null, discordId: null };
       const { error } = await sb.auth.signOut();
       return error ? failFrom(error, error.status) : ok(null);
     },
@@ -331,6 +353,61 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       const { data, error, status } = await sb.rpc('import_procedures', { items: plan });
       if (error) return failFrom(error, status);
       return ok({ created: data.created, updated: data.updated, unchanged: data.unchanged });
+    },
+
+    /* ----- equipe (staff_members; RLS e trigger em supabase/05_staff_admin.sql) ----- */
+    async listStaff() {
+      const { error: g } = await guard('admin');
+      if (g) return g;
+      const { data, error, status } = await sb.from('staff_members').select(STAFF_COLUMNS);
+      if (error) return failFrom(error, status);
+      return ok(data.sort(byStaffName));
+    },
+
+    async createStaffMember(member) {
+      const { error: g } = await guard('admin');
+      if (g) return g;
+      const next = pickStaffMember(member);
+      const { valid, errors } = validateStaffMember(next);
+      if (!valid) return validation(errors);
+      const { data, error, status } = await sb.from('staff_members').insert(next).select(STAFF_COLUMNS).single();
+      if (error?.code === '23505') return validation({ discord_id: 'Discord ID: já cadastrado na staff.' });
+      if (error) return failFrom(error, status);
+      names = new Map();
+      return ok(data);
+    },
+
+    async updateStaffMember(discordId, changes) {
+      const { staff, error: g } = await guard('admin');
+      if (g) return g;
+      const patch = pickStaffMember(changes, { partial: true });
+      delete patch.discord_id;
+      const { data: old, error: e, status: s } = await sb.from('staff_members')
+        .select(STAFF_COLUMNS).eq('discord_id', discordId).maybeSingle();
+      if (e) return failFrom(e, s);
+      if (!old) return fail('NOT_FOUND', 'Membro não encontrado.');
+      const { valid, errors } = validateStaffMember({ ...old, ...patch });
+      if (!valid) return validation(errors);
+      const self = staffSelfError(staff.discord_id, discordId, patch);
+      if (self) return validation({ _: self });
+      const { data, error, status } = await sb.from('staff_members')
+        .update(patch).eq('discord_id', discordId).select(STAFF_COLUMNS).single();
+      if (error) return failFrom(error, status);
+      names = new Map();
+      return ok(data);
+    },
+
+    async deleteStaffMember(discordId) {
+      const { staff, error: g } = await guard('admin');
+      if (g) return g;
+      const self = staffSelfError(staff.discord_id, discordId, 'delete');
+      if (self) return validation({ _: self });
+      const { data, error, status } = await sb.from('staff_members')
+        .delete().eq('discord_id', discordId).select('discord_id');
+      if (error) return failFrom(error, status);
+      if (!data?.length) return fail('NOT_FOUND', 'Membro não encontrado.');
+      names = new Map();
+      return ok(null);
     },
   };
 

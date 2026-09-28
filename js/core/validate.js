@@ -162,6 +162,29 @@ export function validateProcedure(p) {
   return { valid: Object.keys(errors).length === 0, errors };
 }
 
+/** Papéis da staff (staff_members.role). */
+export const STAFF_ROLES = Object.freeze(['suporte', 'moderador', 'admin']);
+export const DISCORD_ID_PATTERN = /^[0-9]{17,20}$/;
+export const STAFF_NAME_MAX = 80;
+
+/**
+ * Valida um membro da staff (mesmas regras dos CHECKs de staff_members).
+ * @param {{ discord_id?: any, display_name?: any, role?: any, active?: any }} m
+ * @returns {{ valid: boolean, errors: Record<string, string> }}
+ */
+export function validateStaffMember(m) {
+  const errors = {};
+  if (!m || typeof m !== 'object') return { valid: false, errors: { _: 'Membro inválido.' } };
+  if (typeof m.discord_id !== 'string' || !DISCORD_ID_PATTERN.test(m.discord_id)) {
+    errors.discord_id = 'Discord ID: use só números (17 a 20 dígitos). No Discord: Modo Desenvolvedor, clique no perfil, Copiar ID.';
+  }
+  if (isBlank(m.display_name)) errors.display_name = 'Nome: obrigatório.';
+  else if (len(m.display_name) > STAFF_NAME_MAX) errors.display_name = `Nome: máximo de ${STAFF_NAME_MAX} caracteres.`;
+  if (!STAFF_ROLES.includes(m.role)) errors.role = 'Cargo: use suporte, moderador ou admin.';
+  if (typeof m.active !== 'boolean') errors.active = 'Situação: escolha ativo ou inativo.';
+  return { valid: Object.keys(errors).length === 0, errors };
+}
+
 /** true só para URLs absolutas https:// com host (ex.: https://discord.com/channels/...). */
 export function isHttpsUrl(value) {
   if (typeof value !== 'string' || /\s/.test(value)) return false;
