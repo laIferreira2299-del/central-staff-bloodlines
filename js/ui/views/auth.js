@@ -58,6 +58,20 @@ export function renderLogin(app) {
   )));
 }
 
+/** Logado, mas a consulta ao cadastro falhou: mostra o motivo e deixa tentar de novo ou sair. */
+export function renderLoginError(app, error, retry) {
+  const detail = [error?.code, error?.message].filter(Boolean).join(': ');
+  app.els.main.replaceChildren(h('div', { class: 'auth-wrap' }, card(
+    h('h1', { class: 'auth-title', tabindex: '-1' }, 'Não foi possível entrar'),
+    h('p', { class: 'auth-text' }, error?.code === 'NETWORK'
+      ? 'Sem resposta do servidor. Verifique a conexão e tente de novo.'
+      : 'O login com o Discord funcionou, mas a Central não conseguiu confirmar seu cadastro na staff. Tente de novo; se continuar, envie o detalhe abaixo para um admin.'),
+    detail && h('p', { class: 'field-hint', id: 'login-error-detail' }, `Detalhe: ${detail}`),
+    h('button', { type: 'button', class: 'btn btn--primary btn--block', id: 'login-retry', onclick: retry }, icon('refresh'), 'Tentar de novo'),
+    h('button', { type: 'button', class: 'btn btn--block', id: 'login-error-signout', onclick: () => app.signOut() }, icon('logout'), 'Sair'),
+  )));
+}
+
 export function renderRestricted(app) {
   app.els.main.replaceChildren(h('div', { class: 'auth-wrap' }, card(
     h('h1', { class: 'auth-title', tabindex: '-1' }, 'Acesso restrito à staff do Bloodlines RP'),

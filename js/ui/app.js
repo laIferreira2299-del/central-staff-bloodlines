@@ -4,7 +4,7 @@ import { buildIndex, search } from '../core/search.js';
 import { debounce, toast } from './dom.js';
 import { createRouter } from './router.js';
 import { renderSidebar, renderUser } from './views/layout.js';
-import { renderLoading, renderLogin, renderRestricted } from './views/auth.js';
+import { renderLoading, renderLogin, renderLoginError, renderRestricted } from './views/auth.js';
 import { renderHome } from './views/home.js';
 import { renderProcedurePage } from './views/procedure.js';
 import { renderForm } from './views/form.js';
@@ -245,7 +245,8 @@ export function createApp(adapter, { isMock = false } = {}) {
     if (token !== authToken) return;
     if (staff.error) {
       document.body.dataset.state = 'auth';
-      renderMessage(app, { title: 'Não foi possível entrar', text: 'Verifique a conexão e recarregue a página.' });
+      console.error('[Central] Falha ao consultar o cadastro na staff:', staff.error);
+      renderLoginError(app, staff.error, () => syncAuth());
       return;
     }
     if (!staff.data) {
