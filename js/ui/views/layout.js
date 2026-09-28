@@ -11,7 +11,8 @@ export function renderUser(app) {
     ? h('img', { class: 'avatar', src: session.user.avatar_url, alt: '', width: 34, height: 34, referrerpolicy: 'no-referrer' })
     : h('div', { class: 'avatar', 'aria-hidden': 'true' }, initials);
 
-  app.els.user.replaceChildren(
+  // replaceChildren escreveria "false" como texto: o filter tira os itens condicionais ausentes.
+  app.els.user.replaceChildren(...[
     avatar,
     h('div', { class: 'user-info' },
       h('span', { class: 'user-name' }, name),
@@ -22,7 +23,7 @@ export function renderUser(app) {
       icon('database-export')),
     h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Sair', title: 'Sair', onclick: () => app.signOut() },
       icon('logout')),
-  );
+  ].filter(Boolean));
 }
 
 export function renderSidebar(app) {
@@ -42,7 +43,7 @@ export function renderSidebar(app) {
     h('span', { class: 'cat-label' }, label),
     h('span', { class: 'cat-count' }, h('span', { class: 'sr-only' }, ', '), count, h('span', { class: 'sr-only' }, ' procedimentos'))));
 
-  app.els.sidebar.replaceChildren(
+  app.els.sidebar.replaceChildren(...[
     h('a', { class: 'btn btn--primary btn--block sidebar-new', href: '#/novo' }, icon('plus'), 'Novo procedimento'),
     h('nav', { 'aria-labelledby': 'sidebar-title' },
       h('h2', { class: 'sidebar-title', id: 'sidebar-title' }, 'Categorias'),
@@ -61,5 +62,5 @@ export function renderSidebar(app) {
       [['#/equipe', 'users', 'Equipe da staff'], ['#/admin', 'database-export', 'Exportar e importar']].map(([href, ico, label]) =>
         h('a', { class: 'cat-item', href, 'data-nav': '', 'aria-current': String(app.router.route.hash === href) },
           h('span', { class: 'cat-label' }, icon(ico), ' ', label)))),
-  );
+  ].filter(Boolean));
 }
