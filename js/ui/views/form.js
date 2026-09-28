@@ -52,7 +52,7 @@ export function renderForm(app, { slug } = {}) {
     return null;
   }
 
-  const draftKey = DRAFT_PREFIX + (editing ? original.id : 'novo');
+  const draftKey = `${DRAFT_PREFIX}${app.state.session.user.id}:` + (editing ? original.id : 'novo');
   const existingSlugs = app.state.procedures.filter((p) => p.id !== original?.id).map((p) => p.slug);
   const initial = editing ? toDraft(original) : emptyDraft(app.state.prefillTitle);
   if (!editing && initial.title.trim()) initial.slug = uniqueSlug(initial.title, existingSlugs);

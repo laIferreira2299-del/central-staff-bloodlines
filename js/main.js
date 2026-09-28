@@ -35,5 +35,30 @@ async function createAdapter() {
   return createSupabaseAdapter();
 }
 
-const adapter = assertAdapter(await createAdapter());
-createApp(adapter, { isMock: DATA_MODE === 'mock' }).start();
+function showUnavailable(message) {
+  document.body.dataset.state = 'auth';
+  const heading = document.createElement('h1');
+  heading.className = 'auth-title';
+  heading.textContent = 'Central temporariamente indisponível';
+  const text = document.createElement('p');
+  text.className = 'auth-text';
+  text.textContent = message;
+  const card = document.createElement('section');
+  card.className = 'auth-card';
+  card.append(heading, text);
+  const wrap = document.createElement('div');
+  wrap.className = 'auth-wrap';
+  wrap.append(card);
+  document.getElementById('main').replaceChildren(wrap);
+}
+
+if (DATA_MODE === 'unconfigured') {
+  showUnavailable('O acesso da equipe está sendo configurado. Tente novamente mais tarde.');
+} else {
+  try {
+    const adapter = assertAdapter(await createAdapter());
+    createApp(adapter, { isMock: DATA_MODE === 'mock' }).start();
+  } catch {
+    showUnavailable('Não foi possível iniciar a Central. Verifique sua conexão e recarregue a página.');
+  }
+}

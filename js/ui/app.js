@@ -64,10 +64,12 @@ export function createApp(adapter, { isMock = false } = {}) {
 
     /** Recarrega procedimentos e favoritos do adapter. */
     async reload() {
+      const token = authToken;
       const [procs, favs] = await Promise.all([
         adapter.listProcedures({ includeArchived: true }),
         adapter.listFavorites(),
       ]);
+      if (token !== authToken) return false;
       if (procs.error) { reportError(procs.error, 'Não foi possível carregar os procedimentos.'); return false; }
       const before = signature();
       state.procedures = procs.data;
@@ -125,7 +127,8 @@ export function createApp(adapter, { isMock = false } = {}) {
     reportError,
 
     async signOut() {
-      await adapter.signOut();
+      const result = await adapter.signOut();
+      if (result.error) reportError(result.error, 'Não foi possível sair. Tente novamente.');
     },
 
     /** Desabilita/habilita os botões que dependem de conexão. */

@@ -53,7 +53,7 @@ function toSession(session) {
     user: {
       id: u.id,
       // Só para exibição; a autorização usa auth.identities no banco.
-      discord_id: discord?.id ?? discord?.identity_data?.provider_id ?? discord?.identity_data?.sub ?? null,
+      discord_id: discord?.provider_id ?? discord?.identity_data?.provider_id ?? discord?.identity_data?.sub ?? null,
       name: meta.full_name ?? meta.custom_claims?.global_name ?? meta.name ?? 'Staff',
       avatar_url: meta.avatar_url ?? null,
     },
@@ -68,7 +68,6 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'pkce' },
   });
 
-  let staffCache = { userId: null, staff: undefined };
   let names = new Map();
 
   async function session() {
@@ -80,11 +79,9 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
   async function currentStaff() {
     const s = await session();
     if (!s) return { error: fail('UNAUTHORIZED') };
-    if (staffCache.userId === s.user.id && staffCache.staff !== undefined) return { staff: staffCache.staff };
     const { data, error, status } = await sb.from('staff_members')
       .select('discord_id, display_name, role').eq('active', true).maybeSingle();
     if (error) return { error: failFrom(error, status) };
-    staffCache = { userId: s.user.id, staff: data ?? null };
     return { staff: data ?? null };
   }
 
@@ -142,19 +139,29 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     },
 
     async signOut() {
-      staffCache = { userId: null, staff: undefined };
       names = new Map();
-      await sb.auth.signOut();
-      return ok(null);
+      const { error } = await sb.auth.signOut();
+      return error ? failFrom(error, error.status) : ok(null);
     },
 
     onAuthChange(cb) {
+      let active = true;
+      const pending = new Set();
       const { data } = sb.auth.onAuthStateChange((event, s) => {
         if (event === 'TOKEN_REFRESHED') return;
-        staffCache = { userId: null, staff: undefined };
-        cb(toSession(s));
+        // Consultas de sessão devem ocorrer depois que o callback liberar o lock do Auth.
+        const timer = setTimeout(() => {
+          pending.delete(timer);
+          if (active) cb(toSession(s));
+        }, 0);
+        pending.add(timer);
       });
-      return { data: { unsubscribe: () => data.subscription.unsubscribe() }, error: null };
+      return { data: { unsubscribe: () => {
+        active = false;
+        for (const timer of pending) clearTimeout(timer);
+        pending.clear();
+        data.subscription.unsubscribe();
+      } }, error: null };
     },
 
     async getCurrentStaff() {
