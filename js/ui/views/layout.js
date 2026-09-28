@@ -11,12 +11,22 @@ export function renderUser(app) {
     ? h('img', { class: 'avatar', src: session.user.avatar_url, alt: '', width: 34, height: 34, referrerpolicy: 'no-referrer' })
     : h('div', { class: 'avatar', 'aria-hidden': 'true' }, initials);
 
+  const unread = app.state.counts?.announcements ?? 0;
+  const pending = (app.state.counts?.proposals ?? 0) + (app.state.counts?.evaluations ?? 0);
+
   // replaceChildren escreveria "false" como texto: o filter tira os itens condicionais ausentes.
   app.els.user.replaceChildren(...[
     avatar,
     h('div', { class: 'user-info' },
       h('span', { class: 'user-name' }, name),
       h('span', { class: `role-badge role-badge--${staff?.role}` }, roleLabel(staff?.role))),
+    app.feature('avisos') && h('a', {
+      class: 'icon-btn icon-btn--count', href: '#/avisos', id: 'nav-announcements',
+      'aria-label': unread ? `Avisos (${unread} não lidos)` : 'Avisos', title: 'Avisos',
+    }, icon('bell'), unread > 0 && h('span', { class: 'count-dot', 'aria-hidden': 'true' }, String(unread))),
+    adminLinks(app).length > 0 && h('a', {
+      class: 'icon-btn icon-btn--count', href: '#/painel', id: 'nav-panel', 'aria-label': 'Painel da staff', title: 'Painel da staff',
+    }, icon('layout-grid'), pending > 0 && h('span', { class: 'count-dot', 'aria-hidden': 'true' }, String(pending))),
     app.can('equipe.ver') && h('a', { class: 'icon-btn', href: '#/equipe', id: 'nav-staff', 'aria-label': 'Equipe da staff', title: 'Equipe da staff' },
       icon('users')),
     app.can('procedimentos.backup') && h('a', { class: 'icon-btn', href: '#/admin', 'aria-label': 'Exportar e importar', title: 'Exportar e importar' },
@@ -24,6 +34,27 @@ export function renderUser(app) {
     h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Sair', title: 'Sair', onclick: () => app.signOut() },
       icon('logout')),
   ].filter(Boolean));
+}
+
+/**
+ * Áreas de administração que a pessoa pode abrir (barra lateral e #/painel), com contadores.
+ * Cada módulo só aparece quando o banco já tem o SQL dele (app.feature).
+ */
+export function adminLinks(app) {
+  const c = app.state.counts ?? {};
+  const evaluations = app.can('avaliacoes.criar') || app.can('avaliacoes.ler') || app.can('avaliacoes.gerenciar');
+  return [
+    app.feature('aprovacao') && (app.can('procedimentos.editar') || app.can('procedimentos.aprovar'))
+      && { href: '#/propostas', ico: 'checklist', label: app.can('procedimentos.aprovar') ? 'Aprovações' : 'Minhas propostas', count: c.proposals, hint: 'Procedimentos novos e edições enviados por Suporte e Moderação.' },
+    app.feature('avaliacoes') && evaluations
+      && { href: '#/avaliacoes-equipe', ico: 'star', label: 'Avaliações da equipe', count: c.evaluations, hint: 'Avaliações do Head Staff e caixa da Direção.' },
+    app.feature('avisos') && app.can('avisos.enviar')
+      && { href: '#/avisos', ico: 'speakerphone', label: 'Avisos', count: 0, hint: 'Criar avisos e ver quem já leu.' },
+    app.can('equipe.ver') && { href: '#/equipe', ico: 'users', label: 'Equipe da staff', hint: 'Membros, cargos, equipes e fichas.' },
+    app.can('permissoes.editar') && { href: '#/permissoes', ico: 'shield-lock', label: 'Permissões dos cargos', hint: 'O que cada cargo pode fazer.' },
+    app.feature('auditoria') && app.can('auditoria.ver') && { href: '#/auditoria', ico: 'history', label: 'Auditoria', hint: 'Registro das ações sensíveis.' },
+    app.can('procedimentos.backup') && { href: '#/admin', ico: 'database-export', label: 'Exportar e importar', hint: 'Backup completo dos procedimentos.' },
+  ].filter(Boolean);
 }
 
 export function renderSidebar(app) {
@@ -43,11 +74,7 @@ export function renderSidebar(app) {
     h('span', { class: 'cat-label' }, label),
     h('span', { class: 'cat-count' }, h('span', { class: 'sr-only' }, ', '), count, h('span', { class: 'sr-only' }, ' procedimentos'))));
 
-  const adminLinks = [
-    app.can('equipe.ver') && ['#/equipe', 'users', 'Equipe da staff'],
-    app.can('permissoes.editar') && ['#/permissoes', 'shield-lock', 'Permissões dos cargos'],
-    app.can('procedimentos.backup') && ['#/admin', 'database-export', 'Exportar e importar'],
-  ].filter(Boolean);
+  const links = adminLinks(app);
 
   app.els.sidebar.replaceChildren(...[
     app.can('procedimentos.editar') && h('a', { class: 'btn btn--primary btn--block sidebar-new', href: '#/novo' }, icon('plus'), 'Novo procedimento'),
@@ -63,10 +90,11 @@ export function renderSidebar(app) {
         'aria-current': String(filters.status === 'arquivado'),
         onclick: () => app.setFilters({ status: filters.status === 'arquivado' ? '' : 'arquivado' }),
       }, h('span', { class: 'cat-label' }, 'Arquivados'), h('span', { class: 'cat-count' }, archivedCount))),
-    adminLinks.length > 0 && h('nav', { class: 'sidebar-tools', 'aria-labelledby': 'sidebar-admin-title' },
+    links.length > 0 && h('nav', { class: 'sidebar-tools', 'aria-labelledby': 'sidebar-admin-title' },
       h('h2', { class: 'sidebar-title', id: 'sidebar-admin-title' }, 'Administração'),
-      adminLinks.map(([href, ico, label]) =>
+      links.map(({ href, ico, label, count }) =>
         h('a', { class: 'cat-item', href, 'data-nav': '', 'aria-current': String(app.router.route.hash === href) },
-          h('span', { class: 'cat-label' }, icon(ico), ' ', label)))),
+          h('span', { class: 'cat-label' }, icon(ico), ' ', label),
+          count > 0 && h('span', { class: 'cat-count cat-count--alert' }, h('span', { class: 'sr-only' }, ', '), count, h('span', { class: 'sr-only' }, ' novos'))))),
   ].filter(Boolean));
 }

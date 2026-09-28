@@ -4,9 +4,13 @@
 // automáticas (2.8), arquivamento em vez de exclusão e auditoria pelo "servidor".
 // Uso: desenvolvimento local (DATA_MODE = 'mock') e testes.
 import {
-  EDITABLE_FIELDS, EXPORT_FORMAT, PROCEDURE_DEFAULTS, byStaffName, fail, ok, pickEditable, pickStaffMember,
+  EDITABLE_FIELDS, EXPORT_FORMAT, FEATURES, PROCEDURE_DEFAULTS, byStaffName, fail, ok, pickEditable, pickStaffMember,
 } from './adapter.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
+import {
+  PROPOSAL_ERRORS, contentChanged, proposalStatus, EVALUATION_ERRORS, evaluationChangeError, validateEvaluation,
+  isPeriodOpen, validateAnnouncement, isAnnouncementFor, PROPOSAL_NOTE_MAX,
+} from '../core/workflow.js';
 import {
   CEO, PERMISSIONS, canReadAudience, defaultGrid, permissionChangesError, permissionsOf, roleLevel, staffChangeError,
 } from '../core/permissions.js';
@@ -28,7 +32,12 @@ export const MOCK_USERS = Object.freeze({
   naostaff: { id: 'mock-u-naostaff', discord_id: '100000000000000009', name: 'Visitante Teste', role: null, active: false },
 });
 
-const STATE_VERSION = 2;
+const STATE_VERSION = 3;
+/** Os 6 critérios iniciais das avaliações (documento 01, seção 6.2; os mesmos do 08). */
+const INITIAL_CRITERIA = Object.freeze([
+  'Postura e respeito no atendimento', 'Conhecimento das regras e da lore', 'Comunicação com players e equipe',
+  'Atividade e assiduidade', 'Trabalho em equipe', 'Qualidade dos registros (entrevistas, allowlists, tickets)',
+]);
 const clone = (v) => structuredClone(v);
 const byTitle = (a, b) => a.title.localeCompare(b.title, 'pt-BR');
 const uuid = () => globalThis.crypto.randomUUID();
@@ -47,7 +56,11 @@ function initialState(seed, adminId, nowIso) {
     created_by: adminId, created_at: nowIso,
     updated_by: adminId, updated_at: nowIso,
   }));
-  return { v: STATE_VERSION, staff, procedures, revisions: [], favorites: [], grid: defaultGrid() };
+  const criteria = INITIAL_CRITERIA.map((label, i) => ({ id: uuid(), label, sort_order: i + 1, active: true, created_at: nowIso }));
+  return {
+    v: STATE_VERSION, staff, procedures, revisions: [], favorites: [], grid: defaultGrid(),
+    proposals: [], periods: [], criteria, evaluations: [], announcements: [], reads: [], audit: [],
+  };
 }
 
 /**
@@ -168,6 +181,10 @@ export function createMockAdapter({
 
   /** Grava uma nova versão (o "trigger": guarda o estado anterior em revisões). */
   function commit(old, changes, staff) {
+    if ('status' in changes && (old.status === 'arquivado') !== (changes.status === 'arquivado')) {
+      audit(staff, 'procedimento', old.id, changes.status === 'arquivado' ? 'arquivado' : 'restaurado',
+        { status: old.status }, { status: changes.status, slug: changes.slug ?? old.slug, title: changes.title ?? old.title });
+    }
     state.revisions.push({
       id: uuid(),
       procedure_id: old.id,
@@ -186,6 +203,28 @@ export function createMockAdapter({
   }
 
   const touchesArchive = (from, to) => from === 'arquivado' || to === 'arquivado';
+  const staffAudit = (m) => ({ display_name: m.display_name, role: m.role, teams: [...(m.teams ?? [])], active: m.active });
+
+  /** Registro de auditoria (no banco, feito por trigger; aqui, pelo "servidor" simulado). */
+  function audit(actor, entity, entityId, action, before, after) {
+    state.audit.push({
+      id: state.audit.length + 1, at: nowIso(), actor: actor?.discord_id ?? 'sistema',
+      entity, entity_id: String(entityId), action, before: before ?? null, after: after ?? null,
+    });
+  }
+
+  const newestFirst = (a, b) => b.created_at.localeCompare(a.created_at);
+  const seesEvaluations = (can) => can('avaliacoes.criar') || can('avaliacoes.ler') || can('avaliacoes.gerenciar');
+  const presentProposal = (p) => ({ ...clone(p), created_by_name: nameOf(p.created_by), reviewed_by_name: p.reviewed_by ? nameOf(p.reviewed_by) : null });
+  const presentEvaluation = (e) => {
+    const { archived_by, archived_at, ...rest } = clone(e);
+    return { ...rest, evaluated_name: nameOf(e.evaluated_id), evaluator_name: nameOf(e.evaluator_id) };
+  };
+  function presentAnnouncement(a, staff) {
+    const r = state.reads.find((x) => x.announcement_id === a.id && x.discord_id === staff.discord_id);
+    return { ...clone(a), created_by_name: nameOf(a.created_by), my_read_at: r?.read_at ?? null, my_acknowledged_at: r?.acknowledged_at ?? null };
+  }
+
   const presentGrid = () => ({
     permissions: PERMISSIONS.map((p) => ({ code: p.code, description: p.description, ceo_only: p.ceoOnly, default_roles: [...p.roles] })),
     grid: clone(state.grid),
@@ -226,6 +265,7 @@ export function createMockAdapter({
         return ok(staff ? {
           discord_id: staff.discord_id, display_name: staff.display_name, role: staff.role,
           level: roleLevel(staff.role), teams: [...(staff.teams ?? [])], permissions: permsOf(staff),
+          features: [...FEATURES],
         } : null);
       });
     },
@@ -250,6 +290,7 @@ export function createMockAdapter({
     /* ----- escrita ----- */
     async createProcedure(data) {
       return run('createProcedure', 'procedimentos.editar', async ({ staff, can, sees }) => {
+        if (!can('procedimentos.aprovar')) return fail('FORBIDDEN', PROPOSAL_ERRORS.direct);
         const next = { ...PROCEDURE_DEFAULTS, ...pickEditable(data) };
         if (next.status === 'arquivado' && !can('procedimentos.arquivar')) return fail('FORBIDDEN');
         const invalid = check(next);
@@ -278,6 +319,7 @@ export function createMockAdapter({
         if (!can('procedimentos.editar')) return fail('FORBIDDEN');
         const next = { ...editableOf(old), ...pickEditable(data) };
         if (touchesArchive(old.status, next.status) && !can('procedimentos.arquivar')) return fail('FORBIDDEN');
+        if (contentChanged(old, next) && !can('procedimentos.aprovar')) return fail('FORBIDDEN', PROPOSAL_ERRORS.direct);
         if (!Number.isInteger(expectedVersion)) {
           return validationError({ version: 'Versão: informe a versão que você estava editando.' });
         }
@@ -333,6 +375,7 @@ export function createMockAdapter({
         if (!sees(old)) return notFound();
         if (!can('procedimentos.editar')) return fail('FORBIDDEN');
         const next = editableOf(rev.snapshot);
+        if (contentChanged(old, next) && !can('procedimentos.aprovar')) return fail('FORBIDDEN', PROPOSAL_ERRORS.direct);
         const invalid = check(next, old.id);
         if (invalid) return invalid;
         return ok(present(commit(old, next, staff)));
@@ -404,6 +447,7 @@ export function createMockAdapter({
           else summary.updated++;
         }
         if (dryRun) return ok(summary);
+        if (summary.created + summary.updated > 0 && !can('procedimentos.aprovar')) return fail('FORBIDDEN', PROPOSAL_ERRORS.direct);
 
         for (const { next, existing } of plan) {
           if (!existing) {
@@ -438,6 +482,7 @@ export function createMockAdapter({
         }
         const member = { ...next, created_at: nowIso() };
         state.staff.push(member);
+        audit(staff, 'membro', member.discord_id, 'adicionado', null, staffAudit(member));
         save();
         return ok(presentStaff(member));
       });
@@ -454,7 +499,9 @@ export function createMockAdapter({
         if (!valid) return validationError(errors);
         const blocked = staffChangeError(staff, member, next, otherActiveCeos(discordId));
         if (blocked) return validationError({ _: blocked });
+        const before = staffAudit(member);
         Object.assign(member, patch);
+        if (JSON.stringify(before) !== JSON.stringify(staffAudit(member))) audit(staff, 'membro', discordId, 'alterado', before, staffAudit(member));
         save();
         return ok(presentStaff(member));
       });
@@ -467,6 +514,7 @@ export function createMockAdapter({
         const blocked = staffChangeError(staff, member, 'delete', otherActiveCeos(discordId));
         if (blocked) return validationError({ _: blocked });
         state.staff = state.staff.filter((s) => s.discord_id !== discordId);
+        audit(staff, 'membro', discordId, 'removido', staffAudit(member), null);
         save();
         return ok(null);
       });
@@ -481,10 +529,321 @@ export function createMockAdapter({
       return run('setPermissions', 'permissoes.editar', async ({ staff }) => {
         const blocked = permissionChangesError(staff.role, changes);
         if (blocked) return validationError({ _: blocked });
-        for (const c of changes) state.grid[c.role][c.permission] = c.allowed;
+        for (const c of changes) {
+          if (state.grid[c.role][c.permission] !== c.allowed) {
+            audit(staff, 'permissao', `${c.role}:${c.permission}`, c.allowed ? 'ligada' : 'desligada', { allowed: !c.allowed }, { allowed: c.allowed });
+          }
+          state.grid[c.role][c.permission] = c.allowed;
+        }
         save();
         return ok(presentGrid());
       });
+    },
+
+    /* ----- Etapa 2B: propostas de procedimentos ----- */
+    async listProposals() {
+      return run('listProposals', 'staff', async ({ staff, can }) => ok(state.proposals
+        .filter((p) => p.created_by === staff.discord_id || can('procedimentos.aprovar'))
+        .sort(newestFirst)
+        .map(presentProposal)));
+    },
+
+    async createProposal({ procedure_id: procedureId = null, base_version: baseVersion = null, data } = {}) {
+      return run('createProposal', 'procedimentos.editar', async ({ staff, sees }) => {
+        let current = null;
+        if (procedureId) {
+          current = findById(procedureId);
+          if (!sees(current)) return notFound();
+          if (!Number.isInteger(baseVersion)) return validationError({ version: 'Versão: informe a versão que você estava editando.' });
+        }
+        const next = { ...PROCEDURE_DEFAULTS, ...(current ? editableOf(current) : {}), ...pickEditable(data) };
+        next.status = proposalStatus(next);
+        const invalid = check(next, current?.id);
+        if (invalid) return invalid;
+        if (!sees(next)) return fail('FORBIDDEN');
+        const proposal = {
+          id: uuid(), procedure_id: procedureId, base_version: procedureId ? baseVersion : null, data: editableOf(next),
+          status: 'pendente', created_by: staff.discord_id, created_at: nowIso(),
+          reviewed_by: null, reviewed_at: null, review_note: '',
+        };
+        state.proposals.push(proposal);
+        save();
+        return ok(presentProposal(proposal));
+      });
+    },
+
+    async cancelProposal(id) {
+      return run('cancelProposal', 'staff', async ({ staff }) => {
+        const pr = state.proposals.find((p) => p.id === id && p.status === 'pendente' && p.created_by === staff.discord_id);
+        if (!pr) return fail('NOT_FOUND', 'Proposta não encontrada ou já analisada.');
+        pr.status = 'cancelada';
+        save();
+        return ok(null);
+      });
+    },
+
+    async reviewProposal(id, { approve, note = '' } = {}) {
+      return run('reviewProposal', 'procedimentos.aprovar', async ({ staff, can }) => {
+        const pr = state.proposals.find((p) => p.id === id);
+        if (!pr) return fail('NOT_FOUND', 'Proposta não encontrada.');
+        if (pr.status !== 'pendente') return validationError({ _: PROPOSAL_ERRORS.reviewed });
+        const text = String(note ?? '').trim();
+        if (text.length > PROPOSAL_NOTE_MAX) return validationError({ _: PROPOSAL_ERRORS.noteMax });
+        const done = (status, procedureId) => {
+          Object.assign(pr, { status, procedure_id: procedureId, reviewed_by: staff.discord_id, reviewed_at: nowIso(), review_note: text });
+          if (!pr.base_version) pr.base_version = 1;
+          audit(staff, 'proposta', pr.id, status, null, { procedure_id: procedureId, author: pr.created_by, title: pr.data.title });
+          save();
+          return ok({ status, procedure_id: procedureId });
+        };
+        if (!approve) {
+          if (!text) return validationError({ _: PROPOSAL_ERRORS.rejectNote });
+          pr.base_version = pr.base_version ?? null;
+          Object.assign(pr, { status: 'recusada', reviewed_by: staff.discord_id, reviewed_at: nowIso(), review_note: text });
+          audit(staff, 'proposta', pr.id, 'recusada', null, { procedure_id: pr.procedure_id, author: pr.created_by, title: pr.data.title });
+          save();
+          return ok({ status: 'recusada', procedure_id: pr.procedure_id });
+        }
+        if (!can('procedimentos.editar')) return fail('FORBIDDEN');
+        const data = { ...clone(pr.data), status: proposalStatus(pr.data) };
+        if (!pr.procedure_id) {
+          const invalid = check(data);
+          if (invalid) return invalid;
+          const at = nowIso();
+          const proc = {
+            id: uuid(), ...editableOf(data), last_reviewed_at: null, last_reviewed_by: null, version: 1,
+            created_by: staff.discord_id, created_at: at, updated_by: staff.discord_id, updated_at: at,
+          };
+          state.procedures.push(proc);
+          return done('aprovada', proc.id);
+        }
+        const cur = findById(pr.procedure_id);
+        if (!cur) return fail('NOT_FOUND', 'Procedimento não encontrado.');
+        if (cur.status === 'arquivado') return validationError({ _: PROPOSAL_ERRORS.archived });
+        const invalid = check(data, cur.id);
+        if (invalid) return invalid;
+        commit(cur, editableOf(data), staff);
+        return done('aprovada', cur.id);
+      });
+    },
+
+    /* ----- Etapa 3: avaliações da equipe ----- */
+    async listEvaluationPeriods() {
+      return run('listEvaluationPeriods', 'staff', async ({ can }) => {
+        if (!seesEvaluations(can)) return fail('FORBIDDEN');
+        return ok([...state.periods].sort((a, b) => b.starts_at.localeCompare(a.starts_at)).map(clone));
+      });
+    },
+
+    async saveEvaluationPeriod(period = {}) {
+      return run('saveEvaluationPeriod', 'avaliacoes.gerenciar', async ({ staff }) => {
+        const title = String(period.title ?? '').trim();
+        const errors = {};
+        if (!title || title.length > 80) errors.title = 'Nome do período: de 1 a 80 caracteres.';
+        const startsAt = period.starts_at ?? nowIso();
+        const endsAt = period.ends_at;
+        if (!endsAt || !(new Date(endsAt) > new Date(startsAt))) errors.ends_at = 'Fim: precisa ser depois do início.';
+        if (Object.keys(errors).length) return validationError(errors);
+        let row = period.id ? state.periods.find((x) => x.id === period.id) : null;
+        if (period.id && !row) return fail('NOT_FOUND', 'Período não encontrado.');
+        const before = row ? { starts_at: row.starts_at, ends_at: row.ends_at } : null;
+        if (!row) {
+          row = { id: uuid(), created_by: staff.discord_id, created_at: nowIso() };
+          state.periods.push(row);
+        }
+        Object.assign(row, { title, starts_at: new Date(startsAt).toISOString(), ends_at: new Date(endsAt).toISOString() });
+        audit(staff, 'periodo', row.id, before ? 'alterado' : 'aberto', before, { title, starts_at: row.starts_at, ends_at: row.ends_at });
+        save();
+        return ok(clone(row));
+      });
+    },
+
+    async listEvaluationCriteria() {
+      return run('listEvaluationCriteria', 'staff', async ({ can }) => {
+        if (!seesEvaluations(can)) return fail('FORBIDDEN');
+        return ok([...state.criteria].sort((a, b) => a.sort_order - b.sort_order).map(({ created_at, ...c }) => clone(c)));
+      });
+    },
+
+    async saveEvaluationCriterion(c = {}) {
+      return run('saveEvaluationCriterion', 'avaliacoes.gerenciar', async () => {
+        const label = String(c.label ?? '').trim();
+        if (!label || label.length > 80) return validationError({ label: 'Critério: de 1 a 80 caracteres.' });
+        let row = c.id ? state.criteria.find((x) => x.id === c.id) : null;
+        if (c.id && !row) return fail('NOT_FOUND', 'Critério não encontrado.');
+        if (!row) {
+          row = { id: uuid(), created_at: nowIso(), sort_order: Math.max(0, ...state.criteria.map((x) => x.sort_order)) + 1, active: true };
+          state.criteria.push(row);
+        }
+        Object.assign(row, { label, ...(Number.isInteger(c.sort_order) ? { sort_order: c.sort_order } : {}), ...(typeof c.active === 'boolean' ? { active: c.active } : {}) });
+        save();
+        const { created_at, ...out } = row;
+        return ok(clone(out));
+      });
+    },
+
+    async listEvaluableMembers() {
+      return run('listEvaluableMembers', 'avaliacoes.criar', async ({ staff }) => ok(state.staff
+        .filter((s) => s.active && s.discord_id !== staff.discord_id && roleLevel(s.role) < roleLevel(staff.role))
+        .sort(byStaffName)
+        .map((s) => ({ discord_id: s.discord_id, display_name: s.display_name, role: s.role }))));
+    },
+
+    async listEvaluations() {
+      return run('listEvaluations', 'staff', async ({ staff, can }) => ok(state.evaluations
+        .filter((e) => e.evaluator_id === staff.discord_id
+          || (can('avaliacoes.ler') && e.status !== 'rascunho' && e.evaluated_id !== staff.discord_id))
+        .sort((a, b) => (b.submitted_at ?? b.updated_at).localeCompare(a.submitted_at ?? a.updated_at))
+        .map(presentEvaluation)));
+    },
+
+    async saveEvaluation(input = {}) {
+      return run('saveEvaluation', 'avaliacoes.criar', async ({ staff }) => {
+        const before = input.id ? state.evaluations.find((e) => e.id === input.id && e.evaluator_id === staff.discord_id) : null;
+        if (input.id && !before) return fail('NOT_FOUND', 'Avaliação não encontrada.');
+        const fields = ['period_id', 'evaluated_id', 'status', 'criteria', 'overall', 'strengths', 'improvements', 'feedback', 'recommendation'];
+        const after = { ...(before ? clone(before) : { status: 'rascunho', criteria: [], overall: null, strengths: '', improvements: '', feedback: '', recommendation: null }) };
+        for (const f of fields) if (f in input) after[f] = clone(input[f]);
+        for (const f of ['strengths', 'improvements', 'feedback']) after[f] = String(after[f] ?? '');
+        after.overall = after.overall ?? null;
+        after.recommendation = after.recommendation || null;
+        const { valid, errors } = validateEvaluation(after);
+        if (!valid) return validationError(errors);
+        const target = state.staff.find((m) => m.discord_id === after.evaluated_id) ?? null;
+        const blocked = evaluationChangeError(staff, before, after, {
+          period: state.periods.find((x) => x.id === after.period_id) ?? null, target, others: state.evaluations, now: now().getTime(),
+        });
+        if (blocked) return validationError({ _: blocked });
+        const at = nowIso();
+        let row = before;
+        if (!row) {
+          row = { id: uuid(), evaluator_id: staff.discord_id, created_at: at, submitted_at: null, read_by: null, read_at: null };
+          state.evaluations.push(row);
+        }
+        const wasSent = row.status === 'enviada';
+        Object.assign(row, after, { id: row.id, evaluator_id: row.evaluator_id, updated_at: at });
+        if (row.status === 'enviada') {
+          row.submitted_at = row.submitted_at ?? at;
+          if (wasSent) { row.read_by = null; row.read_at = null; }
+          if (!wasSent) audit(staff, 'avaliacao', row.id, 'enviada', null, { evaluated_id: row.evaluated_id, evaluator_id: row.evaluator_id, period_id: row.period_id });
+        }
+        save();
+        return ok(presentEvaluation(row));
+      });
+    },
+
+    async deleteEvaluation(id) {
+      return run('deleteEvaluation', 'staff', async ({ staff }) => {
+        const idx = state.evaluations.findIndex((e) => e.id === id && e.evaluator_id === staff.discord_id && e.status === 'rascunho');
+        if (idx < 0) return fail('NOT_FOUND', 'Rascunho não encontrado.');
+        state.evaluations.splice(idx, 1);
+        save();
+        return ok(null);
+      });
+    },
+
+    async markEvaluationRead(id) {
+      return run('markEvaluationRead', 'avaliacoes.ler', async ({ staff }) => {
+        const e = state.evaluations.find((x) => x.id === id);
+        if (e && e.status === 'enviada' && !e.read_at && e.evaluated_id !== staff.discord_id) {
+          Object.assign(e, { read_by: staff.discord_id, read_at: nowIso() });
+          save();
+        }
+        return ok(null);
+      });
+    },
+
+    async archiveEvaluation(id) {
+      return run('archiveEvaluation', 'avaliacoes.gerenciar', async ({ staff }) => {
+        const e = state.evaluations.find((x) => x.id === id && x.status === 'enviada' && x.evaluated_id !== staff.discord_id);
+        if (!e) return fail('NOT_FOUND', 'Avaliação não encontrada.');
+        Object.assign(e, { status: 'arquivada', archived_by: staff.discord_id, archived_at: nowIso() });
+        audit(staff, 'avaliacao', e.id, 'arquivada', null, { evaluated_id: e.evaluated_id, evaluator_id: e.evaluator_id, period_id: e.period_id });
+        save();
+        return ok(null);
+      });
+    },
+
+    /* ----- Etapa 11: avisos ----- */
+    async listAnnouncements() {
+      return run('listAnnouncements', 'staff', async ({ staff, can }) => ok(state.announcements
+        .filter((a) => can('avisos.enviar') || isAnnouncementFor(a, staff, now().getTime()))
+        .sort((a, b) => b.starts_at.localeCompare(a.starts_at) || b.created_at.localeCompare(a.created_at))
+        .map((a) => presentAnnouncement(a, staff))));
+    },
+
+    async saveAnnouncement(input = {}) {
+      return run('saveAnnouncement', 'avisos.enviar', async ({ staff }) => {
+        let row = input.id ? state.announcements.find((a) => a.id === input.id) : null;
+        if (input.id && !row) return fail('NOT_FOUND', 'Aviso não encontrado.');
+        const next = {
+          title: String(input.title ?? row?.title ?? '').trim(), body: String(input.body ?? row?.body ?? ''),
+          priority: input.priority ?? row?.priority ?? 'normal',
+          audience_roles: [...new Set(input.audience_roles ?? row?.audience_roles ?? [])].sort(),
+          starts_at: input.starts_at ?? row?.starts_at ?? nowIso(), ends_at: ('ends_at' in input ? input.ends_at : row?.ends_at) || null,
+          requires_ack: Boolean(input.requires_ack ?? row?.requires_ack ?? false),
+        };
+        const { valid, errors } = validateAnnouncement(next);
+        if (!valid) return validationError(errors);
+        next.starts_at = new Date(next.starts_at).toISOString();
+        if (next.ends_at) next.ends_at = new Date(next.ends_at).toISOString();
+        if (!row) {
+          row = { id: uuid(), created_by: staff.discord_id, created_at: nowIso() };
+          state.announcements.push(row);
+          audit(staff, 'aviso', row.id, 'criado', null, { title: next.title, priority: next.priority });
+        }
+        Object.assign(row, next, { updated_at: nowIso() });
+        save();
+        return ok(presentAnnouncement(row, staff));
+      });
+    },
+
+    async deleteAnnouncement(id) {
+      return run('deleteAnnouncement', 'avisos.enviar', async ({ staff }) => {
+        const row = state.announcements.find((a) => a.id === id);
+        if (!row) return fail('NOT_FOUND', 'Aviso não encontrado.');
+        state.announcements = state.announcements.filter((a) => a.id !== id);
+        state.reads = state.reads.filter((r) => r.announcement_id !== id);
+        audit(staff, 'aviso', id, 'apagado', { title: row.title, priority: row.priority }, null);
+        save();
+        return ok(null);
+      });
+    },
+
+    async markAnnouncementRead(id, { ack = false } = {}) {
+      return run('markAnnouncementRead', 'staff', async ({ staff }) => {
+        const a = state.announcements.find((x) => x.id === id);
+        if (!a || !isAnnouncementFor(a, staff, now().getTime())) return fail('NOT_FOUND', 'Aviso não encontrado.');
+        let r = state.reads.find((x) => x.announcement_id === id && x.discord_id === staff.discord_id);
+        if (!r) { r = { announcement_id: id, discord_id: staff.discord_id, read_at: nowIso(), acknowledged_at: null }; state.reads.push(r); }
+        if (ack && !r.acknowledged_at) r.acknowledged_at = nowIso();
+        save();
+        return ok(null);
+      });
+    },
+
+    async getAnnouncementReport(id) {
+      return run('getAnnouncementReport', 'avisos.enviar', async () => {
+        const a = state.announcements.find((x) => x.id === id);
+        if (!a) return fail('NOT_FOUND', 'Aviso não encontrado.');
+        const rows = state.staff
+          .filter((s) => s.active && (!a.audience_roles.length || a.audience_roles.includes(s.role)))
+          .map((s) => {
+            const r = state.reads.find((x) => x.announcement_id === id && x.discord_id === s.discord_id);
+            return { discord_id: s.discord_id, display_name: s.display_name, role: s.role, read_at: r?.read_at ?? null, acknowledged_at: r?.acknowledged_at ?? null };
+          })
+          .sort((x, y) => (x.read_at ? 1 : 0) - (y.read_at ? 1 : 0) || byStaffName(x, y));
+        return ok(rows);
+      });
+    },
+
+    /* ----- Etapa 11: auditoria ----- */
+    async listAudit({ entity = '', entityId = '', limit = 100, before = null } = {}) {
+      return run('listAudit', 'auditoria.ver', async () => ok(state.audit
+        .filter((a) => (!entity || a.entity === entity) && (!entityId || a.entity_id === entityId) && (before == null || a.id < before))
+        .sort((a, b) => b.id - a.id)
+        .slice(0, Math.min(Math.max(1, limit), 500))
+        .map((a) => ({ ...clone(a), actor_name: nameOf(a.actor) }))));
     },
   };
 

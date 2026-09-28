@@ -1,7 +1,7 @@
 // Controlador da interface: sessão, dados, estado, roteamento e ações comuns.
 // Toda leitura/escrita passa pelo adapter (nunca direto no Supabase).
 import { buildIndex, search } from '../core/search.js';
-import { debounce, toast } from './dom.js';
+import { debounce, h, icon, toast } from './dom.js';
 import { createRouter } from './router.js';
 import { renderSidebar, renderUser } from './views/layout.js';
 import { renderLoading, renderLogin, renderLoginError, renderRestricted } from './views/auth.js';
@@ -12,6 +12,14 @@ import { renderHistory } from './views/history.js';
 import { renderAdmin } from './views/admin.js';
 import { renderStaff } from './views/staff.js';
 import { renderMember } from './views/member.js';
+import { renderProposal, renderProposals } from './views/proposals.js';
+import { renderEvaluation, renderEvaluations } from './views/evaluations.js';
+import { renderAnnouncements } from './views/announcements.js';
+import { renderAudit } from './views/audit.js';
+import { renderPanel } from './views/panel.js';
+import { isAnnouncementFor } from '../core/workflow.js';
+import { renderMarkdownInto } from '../core/render-md.js';
+import { openDialog } from './modal.js';
 import { renderPermissions } from './views/permissions.js';
 import { renderMessage } from './views/message.js';
 
@@ -36,7 +44,11 @@ export function createApp(adapter, { isMock = false } = {}) {
     filters: { ...EMPTY_FILTERS },
     prefillTitle: '',
     ready: false,
+    // Etapas 2B, 3 e 11: contadores do menu e avisos visíveis para quem está logado.
+    counts: { proposals: 0, evaluations: 0, announcements: 0 },
+    announcements: [],
   };
+  const shownUrgent = new Set();
 
   let viewCleanup = null;
   let authToken = 0;
@@ -51,6 +63,58 @@ export function createApp(adapter, { isMock = false } = {}) {
      */
     can(permission) {
       return Boolean(state.staff?.permissions?.includes(permission));
+    },
+
+    /** O banco já tem este módulo? ('aprovacao', 'avaliacoes', 'avisos', 'auditoria') */
+    feature(name) {
+      return Boolean(state.staff?.features?.includes(name));
+    },
+
+    /** Etapa 2B: sem procedimentos.aprovar, o conteúdo novo ou editado vai para aprovação. */
+    needsApproval() {
+      return app.feature('aprovacao') && app.can('procedimentos.editar') && !app.can('procedimentos.aprovar');
+    },
+
+    /** Etapa 2B: voltar conteúdo antigo (histórico) também exige procedimentos.aprovar. */
+    canRestoreRevision() {
+      return app.can('procedimentos.arquivar') && (!app.feature('aprovacao') || app.can('procedimentos.aprovar'));
+    },
+
+    /**
+     * Contadores do menu (propostas pendentes, avaliações novas, avisos não lidos) e alertas
+     * de avisos importantes e urgentes. Chamado a cada navegação, sem travar a tela.
+     */
+    async refreshCounts() {
+      const token = authToken;
+      const me = state.staff?.discord_id;
+      const counts = { proposals: 0, evaluations: 0, announcements: 0 };
+      let announcements = state.announcements;
+      await Promise.all([
+        app.feature('aprovacao') && app.can('procedimentos.aprovar') && adapter.listProposals().then((r) => {
+          if (!r.error) counts.proposals = r.data.filter((p) => p.status === 'pendente').length;
+        }),
+        app.feature('avaliacoes') && app.can('avaliacoes.ler') && adapter.listEvaluations().then((r) => {
+          if (!r.error) counts.evaluations = r.data.filter((e) => e.status === 'enviada' && !e.read_at && e.evaluator_id !== me).length;
+        }),
+        app.feature('avisos') && adapter.listAnnouncements().then((r) => {
+          if (!r.error) announcements = r.data.filter((a) => isAnnouncementFor(a, state.staff));
+        }),
+      ].filter(Boolean));
+      if (token !== authToken || !state.staff) return;
+      counts.announcements = announcements.filter((a) => !a.my_read_at).length;
+      const changed = JSON.stringify(counts) !== JSON.stringify(state.counts);
+      state.counts = counts;
+      state.announcements = announcements;
+      if (changed) { renderUser(app); renderSidebar(app); }
+      renderAnnouncementAlerts();
+    },
+
+    /** Marca um aviso como lido (e "Li e entendi") e atualiza faixa e contador. */
+    async readAnnouncement(id, { ack = false } = {}) {
+      const r = await adapter.markAnnouncementRead(id, { ack });
+      if (r.error) { reportError(r.error, 'Não foi possível marcar o aviso como lido.'); return false; }
+      await app.refreshCounts();
+      return true;
     },
 
     bySlug: (slug) => state.procedures.find((p) => p.slug === slug) ?? null,
@@ -73,6 +137,7 @@ export function createApp(adapter, { isMock = false } = {}) {
         adapter.listFavorites(),
         app.refreshStaff(),
       ]);
+      app.refreshCounts();
       if (token !== authToken) return false;
       if (procs.error) { reportError(procs.error, 'Não foi possível carregar os procedimentos.'); return false; }
       const before = signature();
@@ -103,7 +168,7 @@ export function createApp(adapter, { isMock = false } = {}) {
     /** Re-renderiza a rota atual mantendo rolagem e foco (após mudança de dados). */
     render() {
       const route = router.route;
-      if (!state.ready || ['new', 'edit', 'permissions'].includes(route.name)) return;
+      if (!state.ready || ['new', 'edit', 'permissions', 'evaluation', 'evaluations', 'announcements', 'proposal'].includes(route.name)) return;
       const key = document.activeElement?.dataset?.focusKey;
       const y = window.scrollY;
       showRoute(route, { navigated: false });
@@ -177,6 +242,37 @@ export function createApp(adapter, { isMock = false } = {}) {
     toast(messages[error?.code] ?? error?.message ?? fallback, 4000);
   }
 
+  /* ---------- avisos: faixa (importante) e janela (urgente) · Etapa 11 ---------- */
+  const alertsEl = h('div', { class: 'alerts', id: 'alerts', 'aria-live': 'polite' });
+  els.main.closest('.layout').before(alertsEl);
+
+  function renderAnnouncementAlerts() {
+    const unread = state.announcements.filter((a) => !a.my_read_at && a.priority !== 'normal');
+    alertsEl.replaceChildren(...unread.filter((a) => a.priority === 'importante').map((a) => h('div', { class: 'banner banner--warn alert-banner', dataset: { announcementId: a.id } },
+      icon('alert-triangle'),
+      h('p', {}, h('strong', {}, '⚠ Aviso importante: '), a.title),
+      h('div', { class: 'banner-actions' },
+        h('a', { class: 'btn btn--sm', href: `#/avisos#aviso-${a.id}` }, 'Abrir'),
+        h('button', { type: 'button', class: 'btn btn--sm btn--ghost', onclick: () => app.readAnnouncement(a.id) }, 'Marcar como lido')))));
+    const urgent = unread.find((a) => a.priority === 'urgente' && !shownUrgent.has(a.id));
+    if (urgent && !document.querySelector('dialog[open]')) showUrgent(urgent);
+  }
+
+  async function showUrgent(a) {
+    shownUrgent.add(a.id);
+    const choice = await openDialog({
+      title: `⚠ ${a.title}`,
+      body: h('div', { class: 'urgent-body' },
+        renderMarkdownInto(h('div', { class: 'md' }), a.body || ''),
+        h('p', { class: 'dialog-hint' }, `Aviso urgente de ${a.created_by_name ?? 'Direção'}.`)),
+      actions: [
+        { label: 'Ver depois', value: 'later', variant: 'ghost' },
+        { label: a.requires_ack ? 'Li e entendi' : 'Marcar como lido', value: 'read', variant: 'primary', autofocus: true },
+      ],
+    });
+    if (choice === 'read') await app.readAnnouncement(a.id, { ack: a.requires_ack });
+  }
+
   /* ---------- rotas ---------- */
   function showRoute(route, { navigated }) {
     if (!state.ready) return;
@@ -190,6 +286,13 @@ export function createApp(adapter, { isMock = false } = {}) {
       history: () => renderHistory(app, route.slug),
       admin: () => renderAdmin(app),
       staff: () => renderStaff(app),
+      proposals: () => renderProposals(app),
+      proposal: () => renderProposal(app, route.slug),
+      evaluations: () => renderEvaluations(app),
+      evaluation: () => renderEvaluation(app, route.slug),
+      announcements: () => renderAnnouncements(app),
+      audit: () => renderAudit(app),
+      panel: () => renderPanel(app),
       member: () => renderMember(app, route.slug),
       permissions: () => renderPermissions(app),
       notfound: () => renderMessage(app, { title: 'Página não encontrada', text: 'Volte para a lista de procedimentos.' }),
@@ -236,6 +339,9 @@ export function createApp(adapter, { isMock = false } = {}) {
     state.index = [];
     state.favorites = new Set();
     state.staff = null;
+    state.counts = { proposals: 0, evaluations: 0, announcements: 0 };
+    state.announcements = [];
+    alertsEl.replaceChildren();
     state.query = '';
     state.filters = { ...EMPTY_FILTERS };
     els.search.value = '';

@@ -1,10 +1,13 @@
 // Ficha do membro (#/equipe/<discord_id>): dados, cargo, equipes, data de entrada e o que a
 // pessoa pode fazer na Central (permissões efetivas pela grade atual).
-// Produtividade (Etapa 10), avaliações (Etapa 3, só Direção) e histórico de cargos (Etapa 11)
-// entram aqui quando esses módulos existirem.
+// Avaliações recebidas (Etapa 3): só quem tem avaliacoes.ler, e nunca a própria.
+// Histórico de mudanças de cargo (Etapa 11): da auditoria, para quem tem auditoria.ver.
+// Produtividade (Etapa 10) entra quando o módulo de Allowlist existir.
 import { h, icon } from '../dom.js';
 import { formatDate, roleBadge, statusBadge, teamBadge } from '../components.js';
 import { CEO, PERMISSIONS, permissionsOf, roleLevel } from '../../core/permissions.js';
+import { recommendationLabel, stars } from '../../core/workflow.js';
+import { describeAudit } from './audit.js';
 import { renderMessage } from './message.js';
 
 export function renderMember(app, discordId) {
@@ -38,6 +41,8 @@ export function renderMember(app, discordId) {
     const perms = new Set(permissionsOf(m, grid.error ? undefined : grid.data.grid));
     const self = m.discord_id === app.state.staff.discord_id;
 
+    const evaluationsHost = h('div', {});
+    const historyHost = h('div', {});
     const row = (label, ...value) => h('div', { class: 'member-row' }, h('dt', {}, label), h('dd', {}, ...value));
     body.replaceChildren(
       h('section', { class: 'panel', 'aria-labelledby': 'member-data-title' },
@@ -65,10 +70,42 @@ export function renderMember(app, discordId) {
               p.description);
           }))),
 
+      evaluationsHost,
+      historyHost,
       h('section', { class: 'panel', 'aria-labelledby': 'member-next-title' },
         h('h2', { class: 'block-title', id: 'member-next-title' }, icon('clock'), 'Em breve nesta ficha'),
         h('p', { class: 'panel-text' },
-          'Produtividade (análises de allowlist e entrevistas), avaliações recebidas (só a Direção vê) e histórico de mudanças de cargo aparecem aqui quando esses módulos entrarem no ar.')));
+          'Produtividade (análises de allowlist e entrevistas) aparece aqui quando o módulo de Allowlist entrar no ar.')));
+
+    const nameOf = (id) => staff.data.find((s) => s.discord_id === id)?.display_name ?? id;
+    const [evals, audit] = await Promise.all([
+      !self && app.feature('avaliacoes') && app.can('avaliacoes.ler') ? app.adapter.listEvaluations() : null,
+      app.feature('auditoria') && app.can('auditoria.ver') ? app.adapter.listAudit({ entity: 'membro', entityId: m.discord_id, limit: 50 }) : null,
+    ]);
+    if (!alive) return;
+    if (evals && !evals.error) {
+      const mine = evals.data.filter((e) => e.evaluated_id === m.discord_id && e.status !== 'rascunho')
+        .sort((a, b) => a.submitted_at.localeCompare(b.submitted_at));
+      evaluationsHost.replaceChildren(h('section', { class: 'panel', 'aria-labelledby': 'member-evals-title' },
+        h('h2', { class: 'block-title', id: 'member-evals-title' }, icon('star'), 'Avaliações recebidas'),
+        h('p', { class: 'panel-text' }, 'Só a Direção vê. A nota geral de cada avaliação, da mais antiga para a mais recente:'),
+        mine.length
+          ? h('ol', { class: 'eval-history', id: 'member-evals' }, mine.map((e) => h('li', { class: 'eval-history-item' },
+            h('span', { class: `eval-bar eval-bar--${e.overall}`, 'aria-hidden': 'true' }),
+            h('a', { href: `#/avaliacoes-equipe/${e.id}` }, formatDate(e.submitted_at)),
+            h('span', { class: 'stars', 'aria-label': `Nota ${e.overall} de 5` }, ` ${stars(e.overall)} `),
+            h('span', { class: 'staff-meta' }, `${recommendationLabel(e.recommendation)} · por ${e.evaluator_name ?? e.evaluator_id}${e.status === 'arquivada' ? ' · arquivada' : ''}`))))
+          : h('p', { class: 'panel-text' }, 'Nenhuma avaliação recebida ainda.')));
+    }
+    if (audit && !audit.error) {
+      historyHost.replaceChildren(h('section', { class: 'panel', 'aria-labelledby': 'member-history-title' },
+        h('h2', { class: 'block-title', id: 'member-history-title' }, icon('history'), 'Histórico de mudanças'),
+        audit.data.length
+          ? h('ol', { class: 'audit-list', id: 'member-history' }, audit.data.map((e) => h('li', { class: 'audit-item' },
+            h('time', { class: 'audit-when', datetime: e.at }, formatDate(e.at, { time: true })),
+            h('p', { class: 'audit-what' }, h('strong', {}, e.actor_name ?? nameOf(e.actor)), ' · ', describeAudit(e, nameOf)))))
+          : h('p', { class: 'panel-text' }, 'Nenhuma mudança registrada desde que a auditoria entrou no ar.')));
+    }
   })();
 
   return () => { alive = false; };

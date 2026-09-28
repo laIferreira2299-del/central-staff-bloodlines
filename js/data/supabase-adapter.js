@@ -9,11 +9,15 @@ import {
 } from './adapter.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
 import {
+  PROPOSAL_ERRORS, PROPOSAL_NOTE_MAX, proposalStatus, validateAnnouncement, validateEvaluation,
+} from '../core/workflow.js';
+import {
   CEO, ROLE_CODES, canReadAudience, permissionChangesError, roleLevel, staffChangeError,
 } from '../core/permissions.js';
 
 const STAFF_COLUMNS = 'discord_id, display_name, role, teams, active, created_at';
-
+const EVALUATION_COLUMNS = 'id, period_id, evaluated_id, evaluator_id, status, criteria, overall, strengths, improvements, '
+  + 'feedback, recommendation, created_at, updated_at, submitted_at, read_by, read_at';
 
 /** Perfil do banco → formato do contrato. */
 function toStaff(profile) {
@@ -25,6 +29,7 @@ function toStaff(profile) {
     level: profile.level ?? roleLevel(profile.role),
     teams: [...(profile.teams ?? [])],
     permissions: [...(profile.permissions ?? [])].sort(),
+    features: [...(profile.features ?? [])].sort(),
   };
 }
 
@@ -450,7 +455,258 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       }
       return readGrid();
     },
+
+    /* ----- Etapa 2B: propostas (supabase/07_aprovacao.sql) ----- */
+    async listProposals() {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { data, error, status } = await sb.from('procedure_proposals').select('*').order('created_at', { ascending: false });
+      if (error) return failFrom(error, status);
+      await loadNames();
+      return ok(data.map(presentProposal));
+    },
+
+    async createProposal({ procedure_id: procedureId = null, base_version: baseVersion = null, data } = {}) {
+      const { error: g } = await guard('procedimentos.editar');
+      if (g) return g;
+      let current = null;
+      if (procedureId) {
+        const found = await fetchById(procedureId);
+        if (found.error) return found.error;
+        current = found.proc;
+        if (!Number.isInteger(baseVersion)) return validation({ version: 'Versão: informe a versão que você estava editando.' });
+      }
+      const next = { ...PROCEDURE_DEFAULTS, ...(current ? editableOf(current) : {}), ...pickEditable(data) };
+      next.status = proposalStatus(next);
+      const { valid, errors } = validateProcedure(next);
+      if (!valid) return validation(errors);
+      const { data: taken } = await sb.from('procedures').select('id').eq('slug', next.slug);
+      if (taken?.some((r) => r.id !== current?.id)) return validation({ slug: 'Slug: já existe outro procedimento com este endereço.' });
+      const { data: row, error, status } = await sb.from('procedure_proposals')
+        .insert({ procedure_id: procedureId, base_version: procedureId ? baseVersion : null, data: editableOf(next) })
+        .select('*').single();
+      if (error) return failFrom(error, status);
+      await loadNames();
+      return ok(presentProposal(row));
+    },
+
+    async cancelProposal(id) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { error, status } = await sb.rpc('cancel_procedure_proposal', { p_id: id });
+      if (error) return error.code === 'KB404' ? fail('NOT_FOUND', 'Proposta não encontrada ou já analisada.') : failFrom(error, status);
+      return ok(null);
+    },
+
+    async reviewProposal(id, { approve, note = '' } = {}) {
+      const { error: g } = await guard('procedimentos.aprovar');
+      if (g) return g;
+      const text = String(note ?? '').trim();
+      if (text.length > PROPOSAL_NOTE_MAX) return validation({ _: PROPOSAL_ERRORS.noteMax });
+      if (!approve && !text) return validation({ _: PROPOSAL_ERRORS.rejectNote });
+      const { data, error, status } = await sb.rpc('review_procedure_proposal', { p_id: id, p_approve: Boolean(approve), p_note: text });
+      if (error) return failFrom(error, status);
+      return ok({ status: data.status, procedure_id: data.procedure_id });
+    },
+
+    /* ----- Etapa 3: avaliações (supabase/08_avaliacoes.sql) ----- */
+    async listEvaluationPeriods() {
+      const { can, error: g } = await guard();
+      if (g) return g;
+      if (!seesEvaluations(can)) return fail('FORBIDDEN');
+      const { data, error, status } = await sb.from('staff_evaluation_periods').select('*').order('starts_at', { ascending: false });
+      return error ? failFrom(error, status) : ok(data);
+    },
+
+    async saveEvaluationPeriod(period = {}) {
+      const { error: g } = await guard('avaliacoes.gerenciar');
+      if (g) return g;
+      const title = String(period.title ?? '').trim();
+      const errors = {};
+      if (!title || title.length > 80) errors.title = 'Nome do período: de 1 a 80 caracteres.';
+      const startsAt = period.starts_at ?? new Date().toISOString();
+      if (!period.ends_at || !(new Date(period.ends_at) > new Date(startsAt))) errors.ends_at = 'Fim: precisa ser depois do início.';
+      if (Object.keys(errors).length) return validation(errors);
+      const row = { title, starts_at: startsAt, ends_at: period.ends_at };
+      const q = period.id
+        ? sb.from('staff_evaluation_periods').update(row).eq('id', period.id)
+        : sb.from('staff_evaluation_periods').insert(row);
+      const { data, error, status } = await q.select('*').maybeSingle();
+      if (error) return failFrom(error, status);
+      return data ? ok(data) : fail('NOT_FOUND', 'Período não encontrado.');
+    },
+
+    async listEvaluationCriteria() {
+      const { can, error: g } = await guard();
+      if (g) return g;
+      if (!seesEvaluations(can)) return fail('FORBIDDEN');
+      const { data, error, status } = await sb.from('staff_evaluation_criteria').select('id, label, sort_order, active').order('sort_order');
+      return error ? failFrom(error, status) : ok(data);
+    },
+
+    async saveEvaluationCriterion(c = {}) {
+      const { error: g } = await guard('avaliacoes.gerenciar');
+      if (g) return g;
+      const label = String(c.label ?? '').trim();
+      if (!label || label.length > 80) return validation({ label: 'Critério: de 1 a 80 caracteres.' });
+      const row = { label };
+      if (Number.isInteger(c.sort_order)) row.sort_order = c.sort_order;
+      if (typeof c.active === 'boolean') row.active = c.active;
+      if (!c.id && row.sort_order == null) {
+        const { data: last } = await sb.from('staff_evaluation_criteria').select('sort_order').order('sort_order', { ascending: false }).limit(1);
+        row.sort_order = (last?.[0]?.sort_order ?? 0) + 1;
+      }
+      const q = c.id ? sb.from('staff_evaluation_criteria').update(row).eq('id', c.id) : sb.from('staff_evaluation_criteria').insert(row);
+      const { data, error, status } = await q.select('id, label, sort_order, active').maybeSingle();
+      if (error) return failFrom(error, status);
+      return data ? ok(data) : fail('NOT_FOUND', 'Critério não encontrado.');
+    },
+
+    async listEvaluableMembers() {
+      const { error: g } = await guard('avaliacoes.criar');
+      if (g) return g;
+      const { data, error, status } = await sb.rpc('evaluable_members');
+      return error ? failFrom(error, status) : ok(data ?? []);
+    },
+
+    async listEvaluations() {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { data, error, status } = await sb.from('staff_evaluations').select(EVALUATION_COLUMNS);
+      if (error) return failFrom(error, status);
+      await loadNames();
+      const when = (e) => e.submitted_at ?? e.updated_at;
+      return ok(data.sort((a, b) => when(b).localeCompare(when(a))).map(presentEvaluation));
+    },
+
+    async saveEvaluation(input = {}) {
+      const { error: g } = await guard('avaliacoes.criar');
+      if (g) return g;
+      let before = null;
+      if (input.id) {
+        const { data, error, status } = await sb.from('staff_evaluations').select(EVALUATION_COLUMNS).eq('id', input.id).maybeSingle();
+        if (error) return failFrom(error, status);
+        if (!data) return fail('NOT_FOUND', 'Avaliação não encontrada.');
+        before = data;
+      }
+      const fields = ['period_id', 'evaluated_id', 'status', 'criteria', 'overall', 'strengths', 'improvements', 'feedback', 'recommendation'];
+      const after = { ...(before ?? { status: 'rascunho', criteria: [], overall: null, strengths: '', improvements: '', feedback: '', recommendation: null }) };
+      for (const f of fields) if (f in input) after[f] = structuredClone(input[f]);
+      for (const f of ['strengths', 'improvements', 'feedback']) after[f] = String(after[f] ?? '');
+      after.overall = after.overall ?? null;
+      after.recommendation = after.recommendation || null;
+      const { valid, errors } = validateEvaluation(after);
+      if (!valid) return validation(errors);
+      const row = Object.fromEntries(fields.map((f) => [f, after[f]]));
+      const q = before
+        ? sb.from('staff_evaluations').update(row).eq('id', before.id)
+        : sb.from('staff_evaluations').insert(row);
+      const { data, error, status } = await q.select(EVALUATION_COLUMNS).maybeSingle();
+      if (error) return failFrom(error, status);
+      if (!data) return fail('NOT_FOUND', 'Avaliação não encontrada.');
+      await loadNames();
+      return ok(presentEvaluation(data));
+    },
+
+    async deleteEvaluation(id) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { data, error, status } = await sb.from('staff_evaluations').delete().eq('id', id).eq('status', 'rascunho').select('id');
+      if (error) return failFrom(error, status);
+      return data?.length ? ok(null) : fail('NOT_FOUND', 'Rascunho não encontrado.');
+    },
+
+    async markEvaluationRead(id) {
+      const { error: g } = await guard('avaliacoes.ler');
+      if (g) return g;
+      const { error, status } = await sb.rpc('mark_staff_evaluation_read', { p_id: id });
+      return error ? failFrom(error, status) : ok(null);
+    },
+
+    async archiveEvaluation(id) {
+      const { error: g } = await guard('avaliacoes.gerenciar');
+      if (g) return g;
+      const { error, status } = await sb.rpc('archive_staff_evaluation', { p_id: id });
+      return error ? failFrom(error, status) : ok(null);
+    },
+
+    /* ----- Etapa 11: avisos (supabase/09_avisos_auditoria.sql) ----- */
+    async listAnnouncements() {
+      const { staff, error: g } = await guard();
+      if (g) return g;
+      const [list, reads] = await Promise.all([
+        sb.from('announcements').select('*').order('starts_at', { ascending: false }),
+        sb.from('announcement_reads').select('announcement_id, read_at, acknowledged_at').eq('discord_id', staff.discord_id),
+      ]);
+      if (list.error) return failFrom(list.error, list.status);
+      if (reads.error) return failFrom(reads.error, reads.status);
+      await loadNames();
+      const mine = new Map(reads.data.map((r) => [r.announcement_id, r]));
+      return ok(list.data.map((a) => ({
+        ...a, audience_roles: [...(a.audience_roles ?? [])], created_by_name: nameOf(a.created_by),
+        my_read_at: mine.get(a.id)?.read_at ?? null, my_acknowledged_at: mine.get(a.id)?.acknowledged_at ?? null,
+      })));
+    },
+
+    async saveAnnouncement(input = {}) {
+      const { error: g } = await guard('avisos.enviar');
+      if (g) return g;
+      const next = {
+        title: String(input.title ?? '').trim(), body: String(input.body ?? ''), priority: input.priority ?? 'normal',
+        audience_roles: [...new Set(input.audience_roles ?? [])].sort(), starts_at: input.starts_at ?? new Date().toISOString(),
+        ends_at: input.ends_at || null, requires_ack: Boolean(input.requires_ack),
+      };
+      const { valid, errors } = validateAnnouncement(next);
+      if (!valid) return validation(errors);
+      const q = input.id ? sb.from('announcements').update(next).eq('id', input.id) : sb.from('announcements').insert(next);
+      const { data, error, status } = await q.select('*').maybeSingle();
+      if (error) return failFrom(error, status);
+      if (!data) return fail('NOT_FOUND', 'Aviso não encontrado.');
+      await loadNames();
+      return ok({ ...data, created_by_name: nameOf(data.created_by), my_read_at: null, my_acknowledged_at: null });
+    },
+
+    async deleteAnnouncement(id) {
+      const { error: g } = await guard('avisos.enviar');
+      if (g) return g;
+      const { data, error, status } = await sb.from('announcements').delete().eq('id', id).select('id');
+      if (error) return failFrom(error, status);
+      return data?.length ? ok(null) : fail('NOT_FOUND', 'Aviso não encontrado.');
+    },
+
+    async markAnnouncementRead(id, { ack = false } = {}) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { error, status } = await sb.rpc('mark_announcement_read', { p_id: id, p_ack: Boolean(ack) });
+      if (error) return error.code === 'KB404' ? fail('NOT_FOUND', 'Aviso não encontrado.') : failFrom(error, status);
+      return ok(null);
+    },
+
+    async getAnnouncementReport(id) {
+      const { error: g } = await guard('avisos.enviar');
+      if (g) return g;
+      const { data, error, status } = await sb.rpc('announcement_read_report', { p_id: id });
+      return error ? failFrom(error, status) : ok(data ?? []);
+    },
+
+    /* ----- Etapa 11: auditoria ----- */
+    async listAudit({ entity = '', entityId = '', limit = 100, before = null } = {}) {
+      const { error: g } = await guard('auditoria.ver');
+      if (g) return g;
+      let q = sb.from('audit_log').select('*').order('id', { ascending: false }).limit(Math.min(Math.max(1, limit), 500));
+      if (entity) q = q.eq('entity', entity);
+      if (entityId) q = q.eq('entity_id', entityId);
+      if (before != null) q = q.lt('id', before);
+      const { data, error, status } = await q;
+      if (error) return failFrom(error, status);
+      await loadNames();
+      return ok(data.map((a) => ({ ...a, actor_name: nameOf(a.actor) })));
+    },
   };
+
+  const seesEvaluations = (can) => can('avaliacoes.criar') || can('avaliacoes.ler') || can('avaliacoes.gerenciar');
+  const presentProposal = (p) => ({ ...p, created_by_name: nameOf(p.created_by), reviewed_by_name: nameOf(p.reviewed_by) });
+  const presentEvaluation = (e) => ({ ...e, criteria: e.criteria ?? [], evaluated_name: nameOf(e.evaluated_id), evaluator_name: nameOf(e.evaluator_id) });
 
   async function readGrid() {
     const [perms, rows] = await Promise.all([

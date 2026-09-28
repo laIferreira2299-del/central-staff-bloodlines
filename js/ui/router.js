@@ -11,6 +11,13 @@ const ROUTES = [
   ['staff', /^#\/equipe$/],
   ['member', /^#\/equipe\/([0-9]{17,20})$/],
   ['permissions', /^#\/permissoes$/],
+  ['proposals', /^#\/propostas$/],
+  ['proposal', /^#\/propostas\/([0-9a-f-]{36})$/],
+  ['evaluations', /^#\/avaliacoes-equipe$/],
+  ['evaluation', /^#\/avaliacoes-equipe\/([0-9a-f-]{36}|nova)$/],
+  ['announcements', /^#\/avisos(?:#aviso-[0-9a-f-]{36})?$/],
+  ['audit', /^#\/auditoria$/],
+  ['panel', /^#\/painel$/],
 ];
 
 /** @returns {{ name: string, slug?: string, hash: string }} */

@@ -42,6 +42,14 @@
 //   ler a grade de permissões              staff ativo
 //   alterar a grade (setPermissions)       permissoes.editar + travas (VALIDATION): a coluna do
 //                                          CEO não existe; permissões "só CEO" só o CEO muda
+//   Etapa 2B · propostas                 enviar: procedimentos.editar · analisar: procedimentos.aprovar
+//     Sem procedimentos.aprovar, criar/editar CONTEÚDO de procedimento direto = FORBIDDEN
+//     (PROPOSAL_ERRORS.direct): vai por createProposal. Situação (ativo/revisar/arquivar),
+//     marcar como revisado e favoritos continuam diretos.
+//   Etapa 3 · avaliações                 criar: avaliacoes.criar · ler as dos outros: avaliacoes.ler
+//     períodos, critérios e arquivar: avaliacoes.gerenciar. Travas em js/core/workflow.js.
+//   Etapa 11 · avisos                    criar, editar, apagar e relatório: avisos.enviar
+//   Etapa 11 · auditoria                 listAudit: auditoria.ver (só leitura)
 //   Sem a permissão = FORBIDDEN. Padrão por cargo: documento 01-controle-da-staff, seção 2.
 //
 // Travas da equipe (js/core/permissions.js, staffChangeError): ninguém altera o próprio
@@ -64,8 +72,10 @@
  *
  * @typedef {'allowlist'|'lore'|'suporte'|'moderador'|'head_staff'|'admin'|'manager'|'ceo'} Role
  * @typedef {'allowlist'|'lore'} Team
- * @typedef {{ discord_id: string, display_name: string, role: Role, level: number, teams: Team[], permissions: string[] }} Staff
+ * @typedef {{ discord_id: string, display_name: string, role: Role, level: number, teams: Team[], permissions: string[], features: string[] }} Staff
  *           permissions = permissões efetivas (cargo + TAGs; CEO = todas), em ordem alfabética.
+ *           features = módulos que o banco já tem ('aprovacao', 'auditoria', 'avaliacoes', 'avisos');
+ *           a tela de cada módulo só aparece quando o SQL dele já rodou.
  * @typedef {{ discord_id: string, display_name: string, role: Role, teams: Team[], active: boolean, created_at: string }} StaffMember
  * @typedef {{ user: { id: string, discord_id: string|null, name: string, avatar_url: string|null } }} Session
  *
@@ -94,6 +104,29 @@
  *   grid: Record<Role, Record<string, boolean>>
  * }} PermissionGrid  (permissions na ordem do catálogo; grid só com os 7 cargos abaixo do CEO)
  * @typedef {{ role: Role, permission: string, allowed: boolean }} PermissionChange
+ *
+ * @typedef {{
+ *   id: string, procedure_id: string|null, base_version: number|null, data: object,
+ *   status: 'pendente'|'aprovada'|'recusada'|'cancelada',
+ *   created_by: string, created_by_name: string|null, created_at: string,
+ *   reviewed_by: string|null, reviewed_by_name: string|null, reviewed_at: string|null, review_note: string
+ * }} Proposal  (procedure_id null = procedimento novo; data = campos editáveis propostos)
+ * @typedef {{ id: string, title: string, starts_at: string, ends_at: string, created_by: string, created_at: string }} EvaluationPeriod
+ * @typedef {{ id: string, label: string, sort_order: number, active: boolean }} EvaluationCriterion
+ * @typedef {{
+ *   id: string, period_id: string, evaluated_id: string, evaluated_name: string|null,
+ *   evaluator_id: string, evaluator_name: string|null, status: 'rascunho'|'enviada'|'arquivada',
+ *   criteria: Array<{ id: string, label: string, score: number|null }>, overall: number|null,
+ *   strengths: string, improvements: string, feedback: string, recommendation: string|null,
+ *   created_at: string, updated_at: string, submitted_at: string|null, read_by: string|null, read_at: string|null
+ * }} Evaluation
+ * @typedef {{
+ *   id: string, title: string, body: string, priority: 'normal'|'importante'|'urgente', audience_roles: Role[],
+ *   starts_at: string, ends_at: string|null, requires_ack: boolean, created_by: string, created_by_name: string|null,
+ *   created_at: string, my_read_at: string|null, my_acknowledged_at: string|null
+ * }} Announcement  (audience_roles vazio = todos)
+ * @typedef {{ discord_id: string, display_name: string, role: Role, read_at: string|null, acknowledged_at: string|null }} ReadReportRow
+ * @typedef {{ id: number, at: string, actor: string, actor_name: string|null, entity: string, entity_id: string, action: string, before: object|null, after: object|null }} AuditEntry
  */
 
 /**
@@ -140,6 +173,35 @@
  * @property {(changes: PermissionChange[]) => Result<PermissionGrid>} setPermissions
  *           permissoes.editar. Tudo ou nada; devolve a grade nova. Travas = VALIDATION em details.errors._
  *           (CEO na lista, cargo ou permissão inexistente, permissão "só CEO" alterada por quem não é CEO).
+ *
+ * Etapa 2B · propostas
+ * @property {() => Result<Proposal[]>} listProposals      Do autor (as próprias) ou de quem aprova (todas). Mais recentes primeiro.
+ * @property {(p: { procedure_id?: string|null, base_version?: number|null, data: object }) => Result<Proposal>} createProposal
+ *           procedimentos.editar. Valida como procedimento (VALIDATION); slug de outro procedimento = VALIDATION em slug.
+ * @property {(id: string) => Result<null>} cancelProposal  O autor cancela a própria pendente (senão NOT_FOUND).
+ * @property {(id: string, r: { approve: boolean, note?: string }) => Result<{ status: string, procedure_id: string }>} reviewProposal
+ *           procedimentos.aprovar. Recusar exige motivo. Já analisada = VALIDATION.
+ *
+ * Etapa 3 · avaliações
+ * @property {() => Result<EvaluationPeriod[]>} listEvaluationPeriods        Mais recentes primeiro.
+ * @property {(p: { id?: string, title: string, starts_at: string, ends_at: string }) => Result<EvaluationPeriod>} saveEvaluationPeriod
+ * @property {() => Result<EvaluationCriterion[]>} listEvaluationCriteria    Todos (ativos e inativos), por ordem.
+ * @property {(c: { id?: string, label: string, sort_order?: number, active?: boolean }) => Result<EvaluationCriterion>} saveEvaluationCriterion
+ * @property {() => Result<Array<{ discord_id: string, display_name: string, role: Role }>>} listEvaluableMembers
+ * @property {() => Result<Evaluation[]>} listEvaluations   As que a pessoa pode ler (nunca as sobre si mesma). Mais recentes primeiro.
+ * @property {(e: object) => Result<Evaluation>} saveEvaluation     Cria (sem id) ou edita. Travas = VALIDATION em details.errors._.
+ * @property {(id: string) => Result<null>} deleteEvaluation        Só rascunho do próprio autor.
+ * @property {(id: string) => Result<null>} markEvaluationRead      avaliacoes.ler.
+ * @property {(id: string) => Result<null>} archiveEvaluation       avaliacoes.gerenciar.
+ *
+ * Etapa 11 · avisos e auditoria
+ * @property {() => Result<Announcement[]>} listAnnouncements      Os que são para a pessoa (avisos.enviar vê todos). Mais recentes primeiro.
+ * @property {(a: object) => Result<Announcement>} saveAnnouncement  avisos.enviar. Emoji colorido = VALIDATION.
+ * @property {(id: string) => Result<null>} deleteAnnouncement
+ * @property {(id: string, o?: { ack?: boolean }) => Result<null>} markAnnouncementRead
+ * @property {(id: string) => Result<ReadReportRow[]>} getAnnouncementReport   avisos.enviar.
+ * @property {(f?: { entity?: string, entityId?: string, limit?: number, before?: number }) => Result<AuditEntry[]>} listAudit
+ *           auditoria.ver. Mais recentes primeiro; `before` = id para a próxima página.
  */
 
 export const ERROR_CODES = Object.freeze({
@@ -159,7 +221,15 @@ export const ADAPTER_METHODS = Object.freeze([
   'exportAll', 'importAll',
   'listStaff', 'createStaffMember', 'updateStaffMember', 'deleteStaffMember',
   'listPermissionGrid', 'setPermissions',
+  'listProposals', 'createProposal', 'cancelProposal', 'reviewProposal',
+  'listEvaluationPeriods', 'saveEvaluationPeriod', 'listEvaluationCriteria', 'saveEvaluationCriterion',
+  'listEvaluableMembers', 'listEvaluations', 'saveEvaluation', 'deleteEvaluation', 'markEvaluationRead', 'archiveEvaluation',
+  'listAnnouncements', 'saveAnnouncement', 'deleteAnnouncement', 'markAnnouncementRead', 'getAnnouncementReport',
+  'listAudit',
 ]);
+
+/** Módulos que o banco pode ter (Staff.features). */
+export const FEATURES = Object.freeze(['aprovacao', 'auditoria', 'avaliacoes', 'avisos']);
 
 /** Campos que o cliente pode definir. Todo o resto é do servidor. */
 export const EDITABLE_FIELDS = Object.freeze([

@@ -56,6 +56,8 @@ export function renderForm(app, { slug } = {}) {
     return null;
   }
 
+  // Etapa 2B: sem procedimentos.aprovar, salvar = enviar para aprovação (proposta).
+  const proposing = app.needsApproval();
   const draftKey = `${DRAFT_PREFIX}${app.state.session.user.id}:` + (editing ? original.id : 'novo');
   const existingSlugs = app.state.procedures.filter((p) => p.id !== original?.id).map((p) => p.slug);
   const initial = editing ? toDraft(original) : emptyDraft(app.state.prefillTitle);
@@ -148,7 +150,7 @@ export function renderForm(app, { slug } = {}) {
   }
 
   const statusOptions = Object.entries(STATUS_LABELS)
-    .filter(([v]) => v !== 'arquivado' || app.can('procedimentos.arquivar') || draft.status === 'arquivado');
+    .filter(([v]) => v !== 'arquivado' || (!proposing && (app.can('procedimentos.arquivar') || draft.status === 'arquivado')));
 
   function mount() {
     form.replaceChildren(
@@ -183,7 +185,8 @@ export function renderForm(app, { slug } = {}) {
         field({ path: 'source_url', label: 'Link da fonte', hint: 'Link do post original no fórum #faq (https://…).', control: input(draft.source_url, { type: 'url', inputmode: 'url', spellcheck: 'false', placeholder: 'https://discord.com/channels/…' }) })),
       h('div', { class: 'form-actions' },
         h('button', { type: 'button', class: 'btn btn--ghost', 'data-action': 'cancel' }, 'Cancelar'),
-        h('button', { type: 'submit', class: 'btn btn--primary', id: 'save-btn', 'data-requires-online': '' }, icon('device-floppy'), 'Salvar')),
+        h('button', { type: 'submit', class: 'btn btn--primary', id: 'save-btn', 'data-requires-online': '' },
+          icon(proposing ? 'send' : 'device-floppy'), proposing ? 'Enviar para aprovação' : 'Salvar')),
     );
     renderSteps();
     renderCommands();
@@ -328,6 +331,24 @@ export function renderForm(app, { slug } = {}) {
     saving = true;
     const saveBtn = form.querySelector('#save-btn');
     saveBtn.disabled = true;
+    if (proposing) {
+      const sent = await app.adapter.createProposal({
+        procedure_id: editing ? original.id : null, base_version: editing ? baseVersion : null, data: payload,
+      });
+      saving = false;
+      saveBtn.disabled = !app.state.online;
+      if (sent.error) {
+        if (sent.error.code === 'VALIDATION' && sent.error.details?.errors) { showErrors(sent.error.details.errors); errorSummary.focus(); }
+        else app.reportError(sent.error, 'Não foi possível enviar.');
+        return;
+      }
+      storage.remove(draftKey);
+      dirty = false;
+      app.router.clearGuard();
+      toast('Enviado para aprovação. Um Head Staff ou acima vai conferir.', 4000);
+      app.router.go(`#/propostas/${sent.data.id}`);
+      return;
+    }
     const result = editing
       ? await app.adapter.updateProcedure(original.id, payload, baseVersion)
       : await app.adapter.createProcedure(payload);
@@ -444,6 +465,10 @@ export function renderForm(app, { slug } = {}) {
       h('h1', { class: 'page-title', id: 'form-title', tabindex: '-1' }, editing ? 'Editar procedimento' : 'Novo procedimento'),
       editing && h('p', { class: 'page-sub' }, `Editando a versão ${original.version}. Campos com * são obrigatórios.`),
       !editing && h('p', { class: 'page-sub' }, 'Campos com * são obrigatórios.')),
+    proposing && h('div', { class: 'banner banner--info', id: 'approval-note' }, icon('info-circle'),
+      h('p', {}, editing
+        ? 'Seu cargo envia edições para aprovação. A versão atual continua no ar até um Head Staff ou acima aprovar.'
+        : 'Seu cargo envia procedimentos para aprovação. Ele só aparece para todos depois que um Head Staff ou acima aprovar.')),
     draftBanner,
     tabs,
     layout));
