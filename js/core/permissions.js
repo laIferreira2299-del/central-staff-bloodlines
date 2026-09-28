@@ -114,7 +114,51 @@ export const STAFF_ERRORS = Object.freeze({
 /** Mensagens das travas da tela de permissões (supabase/02_functions_triggers.sql). */
 export const PERMISSION_ERRORS = Object.freeze({
   ceoOnly: 'Só o CEO altera quem pode mexer nas permissões.',
+  ceoRow: 'O CEO tem todas as permissões, sempre. A coluna do CEO não muda.',
+  unknown: 'Cargo ou permissão inexistente.',
 });
+
+/** Máximo de alterações salvas de uma vez na tela de permissões (7 cargos x catálogo, com folga). */
+export const MAX_PERMISSION_CHANGES = 500;
+
+/**
+ * Confere uma lista de alterações da grade contra as travas (Decisão 4). Devolve a mensagem
+ * de erro ou null. `actorRole` = cargo de quem está salvando.
+ * @param {string} actorRole
+ * @param {Array<{ role: string, permission: string, allowed: boolean }>} changes
+ */
+export function permissionChangesError(actorRole, changes) {
+  if (!Array.isArray(changes) || changes.length > MAX_PERMISSION_CHANGES) return PERMISSION_ERRORS.unknown;
+  for (const c of changes) {
+    if (!c || typeof c !== 'object' || typeof c.allowed !== 'boolean') return PERMISSION_ERRORS.unknown;
+    if (c.role === CEO) return PERMISSION_ERRORS.ceoRow;
+    const perm = PERMISSIONS.find((p) => p.code === c.permission);
+    if (!perm || !ROLE_CODES.includes(c.role)) return PERMISSION_ERRORS.unknown;
+    if (perm.ceoOnly && actorRole !== CEO) return PERMISSION_ERRORS.ceoOnly;
+  }
+  return null;
+}
+
+/**
+ * Diferença entre duas grades: o que precisa ser gravado para `before` virar `after`.
+ * @returns {Array<{ role: string, permission: string, allowed: boolean }>}
+ */
+export function gridChanges(before, after) {
+  const out = [];
+  for (const role of ROLE_CODES.filter((r) => r !== CEO)) {
+    for (const { code } of PERMISSIONS) {
+      const next = after?.[role]?.[code];
+      if (typeof next === 'boolean' && next !== Boolean(before?.[role]?.[code])) out.push({ role, permission: code, allowed: next });
+    }
+  }
+  return out;
+}
+
+/** Frase simples para a janela de confirmação: "Suporte passa a poder: Criar e editar ...". */
+export function describePermissionChange({ role, permission, allowed }) {
+  const description = PERMISSIONS.find((p) => p.code === permission)?.description ?? permission;
+  return `${roleLabel(role)} ${allowed ? 'passa a poder' : 'deixa de poder'}: ${description}`;
+}
 
 /**
  * Maior nível que alguém pode gerenciar ou atribuir: o CEO pode tudo; os outros só abaixo

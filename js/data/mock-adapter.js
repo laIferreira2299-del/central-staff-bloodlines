@@ -7,7 +7,9 @@ import {
   EDITABLE_FIELDS, EXPORT_FORMAT, PROCEDURE_DEFAULTS, byStaffName, fail, ok, pickEditable, pickStaffMember,
 } from './adapter.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
-import { CEO, canReadAudience, defaultGrid, permissionsOf, roleLevel, staffChangeError } from '../core/permissions.js';
+import {
+  CEO, PERMISSIONS, canReadAudience, defaultGrid, permissionChangesError, permissionsOf, roleLevel, staffChangeError,
+} from '../core/permissions.js';
 
 /**
  * Usuários simulados: um por cargo (a chave é o código do cargo), mais um staff inativo e um
@@ -184,6 +186,10 @@ export function createMockAdapter({
   }
 
   const touchesArchive = (from, to) => from === 'arquivado' || to === 'arquivado';
+  const presentGrid = () => ({
+    permissions: PERMISSIONS.map((p) => ({ code: p.code, description: p.description, ceo_only: p.ceoOnly, default_roles: [...p.roles] })),
+    grid: clone(state.grid),
+  });
   const otherActiveCeos = (discordId) => state.staff.filter((s) => s.role === CEO && s.active && s.discord_id !== discordId).length;
 
   const adapter = {
@@ -463,6 +469,21 @@ export function createMockAdapter({
         state.staff = state.staff.filter((s) => s.discord_id !== discordId);
         save();
         return ok(null);
+      });
+    },
+
+    /* ----- grade de permissões (role_permissions) ----- */
+    async listPermissionGrid() {
+      return run('listPermissionGrid', 'staff', async () => ok(presentGrid()));
+    },
+
+    async setPermissions(changes) {
+      return run('setPermissions', 'permissoes.editar', async ({ staff }) => {
+        const blocked = permissionChangesError(staff.role, changes);
+        if (blocked) return validationError({ _: blocked });
+        for (const c of changes) state.grid[c.role][c.permission] = c.allowed;
+        save();
+        return ok(presentGrid());
       });
     },
   };

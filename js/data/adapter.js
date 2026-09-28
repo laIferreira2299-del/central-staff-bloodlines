@@ -39,6 +39,9 @@
 //   exportar / importar                    procedimentos.backup
 //   listStaff                              equipe.ver
 //   criar / editar / remover membro        equipe.gerenciar + travas da hierarquia (VALIDATION)
+//   ler a grade de permissões              staff ativo
+//   alterar a grade (setPermissions)       permissoes.editar + travas (VALIDATION): a coluna do
+//                                          CEO não existe; permissões "só CEO" só o CEO muda
 //   Sem a permissão = FORBIDDEN. Padrão por cargo: documento 01-controle-da-staff, seção 2.
 //
 // Travas da equipe (js/core/permissions.js, staffChangeError): ninguém altera o próprio
@@ -85,6 +88,12 @@
  * }} Revision  (snapshot = o procedimento como era NAQUELA versão; changed_by/at = autor e data daquela versão)
  *
  * @typedef {{ format: 'bloodlines-kb', version: 1, exported_at: string, procedures: Procedure[] }} ExportPayload
+ *
+ * @typedef {{
+ *   permissions: Array<{ code: string, description: string, ceo_only: boolean, default_roles: Role[] }>,
+ *   grid: Record<Role, Record<string, boolean>>
+ * }} PermissionGrid  (permissions na ordem do catálogo; grid só com os 7 cargos abaixo do CEO)
+ * @typedef {{ role: Role, permission: string, allowed: boolean }} PermissionChange
  */
 
 /**
@@ -127,6 +136,10 @@
  * @property {(discordId: string) => Result<null>} deleteStaffMember
  *           equipe.gerenciar. Apaga o cadastro (o acesso acaba na hora). Travas = VALIDATION em details.errors._.
  *           O histórico dos procedimentos continua, mas o nome some; desativar preserva o nome.
+ * @property {() => Result<PermissionGrid>} listPermissionGrid   Staff ativo. A grade atual (tela #/permissoes).
+ * @property {(changes: PermissionChange[]) => Result<PermissionGrid>} setPermissions
+ *           permissoes.editar. Tudo ou nada; devolve a grade nova. Travas = VALIDATION em details.errors._
+ *           (CEO na lista, cargo ou permissão inexistente, permissão "só CEO" alterada por quem não é CEO).
  */
 
 export const ERROR_CODES = Object.freeze({
@@ -145,6 +158,7 @@ export const ADAPTER_METHODS = Object.freeze([
   'listFavorites', 'addFavorite', 'removeFavorite',
   'exportAll', 'importAll',
   'listStaff', 'createStaffMember', 'updateStaffMember', 'deleteStaffMember',
+  'listPermissionGrid', 'setPermissions',
 ]);
 
 /** Campos que o cliente pode definir. Todo o resto é do servidor. */

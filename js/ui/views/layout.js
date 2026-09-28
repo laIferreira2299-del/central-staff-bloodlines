@@ -45,6 +45,7 @@ export function renderSidebar(app) {
 
   const adminLinks = [
     app.can('equipe.ver') && ['#/equipe', 'users', 'Equipe da staff'],
+    app.can('permissoes.editar') && ['#/permissoes', 'shield-lock', 'Permissões dos cargos'],
     app.can('procedimentos.backup') && ['#/admin', 'database-export', 'Exportar e importar'],
   ].filter(Boolean);
 

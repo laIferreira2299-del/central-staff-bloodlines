@@ -1,6 +1,7 @@
 import { h, highlighted, icon, toast } from './dom.js';
 import { copyText } from './clipboard.js';
 import { highlightRanges } from '../core/search.js';
+import { TEAM_LABELS, roleLabel } from '../core/permissions.js';
 
 export const AUDIENCES = {
   suporte: { label: 'Suporte' },
@@ -95,3 +96,12 @@ export function procedureCard(proc, { isFav, onToggleFav, section, query = '' })
     h('p', { class: 'card-summary' }, hl(proc.summary ?? '')),
     h('div', { class: 'card-foot' }, icon('folder'), proc.category));
 }
+
+/** Selo do cargo: ponto com a cor do cargo (sem emoji) e o nome. Cores em css/app.css (.role-dot--*). */
+export const roleBadge = (role) => h('span', { class: 'badge badge--role', dataset: { role } },
+  h('span', { class: `badge-dot role-dot role-dot--${role}`, 'aria-hidden': 'true' }), roleLabel(role));
+
+/** Selo de TAG de equipe opcional (Equipe de Allowlist, Equipe de Lore). */
+export const teamBadge = (team) => h('span', { class: 'badge badge--team' }, `✦ ${TEAM_LABELS[team] ?? team}`);
+
+export const statusBadge = (active) => h('span', { class: `badge ${active ? 'badge--status' : 'badge--revisar'}` }, active ? 'Ativo' : 'Inativo');

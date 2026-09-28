@@ -8,7 +8,9 @@ import {
   EDITABLE_FIELDS, EXPORT_FORMAT, PROCEDURE_DEFAULTS, byStaffName, fail, ok, pickEditable, pickStaffMember,
 } from './adapter.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
-import { canReadAudience, permissionsOf, roleLevel, staffChangeError } from '../core/permissions.js';
+import {
+  CEO, ROLE_CODES, canReadAudience, permissionChangesError, permissionsOf, roleLevel, staffChangeError,
+} from '../core/permissions.js';
 
 const STAFF_COLUMNS = 'discord_id, display_name, role, teams, active, created_at';
 // COMPATIBILIDADE (Etapa 1): banco ainda sem cargos e permissões (antes de rodar o SQL novo).
@@ -467,7 +469,48 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       names = new Map();
       return ok(null);
     },
+
+    /* ----- grade de permissões (role_permissions; RLS no 03, travas e RPC no 02) ----- */
+    async listPermissionGrid() {
+      const { error: g } = await guard();
+      if (g) return g;
+      return readGrid();
+    },
+
+    async setPermissions(changes) {
+      const { staff, error: g } = await guard('permissoes.editar');
+      if (g) return g;
+      const blocked = permissionChangesError(staff.role, changes);
+      if (blocked) return validation({ _: blocked });
+      if (changes.length) {
+        // Uma chamada = uma transação no banco: tudo ou nada.
+        const { error, status } = await sb.rpc('set_role_permissions', {
+          p_changes: changes.map(({ role, permission, allowed }) => ({ role, permission, allowed })),
+        });
+        if (error) return failFrom(error, status);
+      }
+      return readGrid();
+    },
   };
+
+  async function readGrid() {
+    if (legacy) return fail('FORBIDDEN', 'A tela de permissões funciona depois da atualização do banco (Etapa 1).');
+    const [perms, rows] = await Promise.all([
+      sb.from('permissions').select('code, description, ceo_only, default_roles, sort_order').order('sort_order'),
+      sb.from('role_permissions').select('role, permission, allowed'),
+    ]);
+    if (perms.error) return failFrom(perms.error, perms.status);
+    if (rows.error) return failFrom(rows.error, rows.status);
+    const grid = Object.fromEntries(ROLE_CODES.filter((r) => r !== CEO).map((r) => [r, {}]));
+    for (const p of perms.data) for (const r of Object.keys(grid)) grid[r][p.code] = false;
+    for (const row of rows.data) if (grid[row.role]) grid[row.role][row.permission] = row.allowed;
+    return ok({
+      permissions: perms.data.map((p) => ({
+        code: p.code, description: p.description, ceo_only: p.ceo_only, default_roles: [...(p.default_roles ?? [])],
+      })),
+      grid,
+    });
+  }
 
   return adapter;
 }

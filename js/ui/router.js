@@ -9,6 +9,8 @@ const ROUTES = [
   ['history', /^#\/historico\/([a-z0-9-]+)$/],
   ['admin', /^#\/admin$/],
   ['staff', /^#\/equipe$/],
+  ['member', /^#\/equipe\/([0-9]{17,20})$/],
+  ['permissions', /^#\/permissoes$/],
 ];
 
 /** @returns {{ name: string, slug?: string, hash: string }} */

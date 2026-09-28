@@ -541,7 +541,8 @@ body:not([data-state="app"]) .fab,
 body:not([data-state="app"]) .layout::before { display: none; }
 body:not([data-state="app"]) .layout { grid-template-columns: minmax(0, 1fr); }
 /* No formulário, o botão flutuante "+" cobriria o Salvar. */
-body[data-route="new"] .fab, body[data-route="edit"] .fab, body[data-route="staff"] .fab { display: none; }
+body[data-route="new"] .fab, body[data-route="edit"] .fab, body[data-route="staff"] .fab,
+body[data-route="member"] .fab, body[data-route="permissions"] .fab { display: none; }
 body:not([data-state="app"]) .topbar { grid-template-columns: auto; }
 
 .role-badge { font-size: var(--fs-xs); color: var(--text-2); }
@@ -843,6 +844,68 @@ input[type="file"].input::file-selector-button {
 .staff-tags, .staff-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .sidebar-tools .cat-label .ti { font-size: 16px; vertical-align: -2px; }
 
+/* Etapa 2: selo do cargo (ponto com a cor do cargo, sem emoji) e TAGs de equipe. */
+.badge--role { background: var(--neutral-bg); border-color: var(--border-2); }
+.role-dot--allowlist { background: var(--text-3); }
+.role-dot--lore { background: var(--ok); }
+.role-dot--suporte { background: var(--blue); }
+.role-dot--moderador { background: var(--pink); }
+.role-dot--head_staff { background: var(--warn); }
+.role-dot--admin { background: var(--danger); }
+.role-dot--manager { background: linear-gradient(90deg, var(--danger) 0 50%, var(--warn) 50% 100%); }
+.role-dot--ceo { background: linear-gradient(90deg, var(--blue) 0 50%, var(--pink) 50% 100%); box-shadow: 0 0 0 2px var(--border-2); }
+.badge--team { background: var(--neutral-bg); border-style: dashed; }
+
+/* Filtros e ficha */
+.staff-filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.staff-filters #staff-search { min-width: 200px; flex: 1 1 200px; }
+.staff-link { color: var(--text); text-decoration: underline; text-decoration-color: var(--border-2); text-underline-offset: 3px; }
+.staff-link:hover { text-decoration-color: var(--blue); }
+.staff-empty { padding: var(--space-4); color: var(--text-2); text-align: center; border: 1px dashed var(--border-2); border-radius: var(--radius); }
+.page-head-actions { margin-top: var(--space-3); }
+.field--teams { grid-column: 1 / -1; border: 0; padding: 0; margin: 0; min-width: 0; }
+.field--teams legend { padding: 0; margin-bottom: 6px; }
+.check-row { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); }
+.check { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--fs-sm); cursor: pointer; }
+.check input, .perm-check { width: 18px; height: 18px; accent-color: var(--blue); cursor: pointer; }
+.check input:disabled, .perm-check:disabled { cursor: not-allowed; }
+
+.member-data { display: grid; gap: var(--space-2); }
+.member-row { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: var(--space-3); align-items: center; }
+.member-row dt { color: var(--text-2); font-size: var(--fs-sm); }
+.member-row dd { margin: 0; overflow-wrap: anywhere; }
+.perm-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1) var(--space-4); }
+.perm-item { display: flex; gap: var(--space-2); align-items: baseline; font-size: var(--fs-sm); }
+.perm-item--off { color: var(--text-2); }
+.perm-mark { flex: none; width: 1em; font-weight: 700; }
+.perm-item--on .perm-mark { color: var(--ok); }
+
+/* Tela de permissões (#/permissoes) */
+.perm-grid-wrap { overflow-x: auto; margin: 0 calc(-1 * var(--space-5)); padding: 0 var(--space-5); }
+.perm-grid-wrap:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.perm-grid { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--fs-sm); }
+.perm-grid th, .perm-grid td { padding: var(--space-2); border-bottom: 1px solid var(--border); text-align: center; vertical-align: middle; }
+.perm-grid thead th { color: var(--text-2); font-weight: 600; white-space: nowrap; }
+.perm-grid .perm-col-name { position: sticky; left: 0; z-index: 1; min-width: 240px; background: var(--surface-1); text-align: left; font-weight: 500; }
+.perm-desc { display: block; color: var(--text); }
+.perm-code { display: block; color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-xs); }
+.perm-note { display: block; color: var(--warn); font-size: var(--fs-xs); }
+.perm-cell--changed { background: var(--warn-bg); box-shadow: inset 0 0 0 1px var(--warn-border); }
+.perm-cell--ceo { color: var(--text-2); white-space: nowrap; }
+.perm-row--locked .perm-desc { color: var(--text-2); }
+.perm-actions {
+  position: sticky; bottom: 0; z-index: 2;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+}
+.perm-status { color: var(--text-2); font-size: var(--fs-sm); }
+.perm-status--dirty { color: var(--warn); font-weight: 600; }
+.perm-confirm-list { margin: 0 0 var(--space-3); padding-left: var(--space-5); list-style: disc; display: grid; gap: var(--space-1); max-height: 50vh; overflow-y: auto; }
+
 @media (max-width: 1199.98px) {
   .staff-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -850,6 +913,10 @@ input[type="file"].input::file-selector-button {
   .staff-form-grid { grid-template-columns: minmax(0, 1fr); }
   .staff-row { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
   .staff-actions .btn { flex: 1 1 auto; }
+  .member-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .perm-list { grid-template-columns: minmax(0, 1fr); }
+  .perm-grid .perm-col-name { min-width: 180px; }
+  .perm-actions .panel-actions .btn { flex: 1 1 auto; }
 }
 
 /* ---------- Login e acesso restrito ---------- */

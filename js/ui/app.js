@@ -11,6 +11,8 @@ import { renderForm } from './views/form.js';
 import { renderHistory } from './views/history.js';
 import { renderAdmin } from './views/admin.js';
 import { renderStaff } from './views/staff.js';
+import { renderMember } from './views/member.js';
+import { renderPermissions } from './views/permissions.js';
 import { renderMessage } from './views/message.js';
 
 const SEARCH_DEBOUNCE_MS = 150;
@@ -66,9 +68,10 @@ export function createApp(adapter, { isMock = false } = {}) {
     /** Recarrega procedimentos e favoritos do adapter. */
     async reload() {
       const token = authToken;
-      const [procs, favs] = await Promise.all([
+      const [procs, favs, staffChanged] = await Promise.all([
         adapter.listProcedures({ includeArchived: true }),
         adapter.listFavorites(),
+        app.refreshStaff(),
       ]);
       if (token !== authToken) return false;
       if (procs.error) { reportError(procs.error, 'Não foi possível carregar os procedimentos.'); return false; }
@@ -76,15 +79,31 @@ export function createApp(adapter, { isMock = false } = {}) {
       state.procedures = procs.data;
       state.index = buildIndex(procs.data);
       if (!favs.error) state.favorites = new Set(favs.data);
-      const changed = signature() !== before;
+      const changed = signature() !== before || staffChanged;
       if (changed) renderSidebar(app);
       return changed;
+    },
+
+    /**
+     * Relê o cargo e as permissões de quem está logado: o CEO pode ter mudado a grade ou o
+     * cargo da pessoa. Chamado a cada navegação (via reload). Devolve true se algo mudou.
+     */
+    async refreshStaff() {
+      const token = authToken;
+      const result = await adapter.getCurrentStaff();
+      if (token !== authToken || result.error || !state.staff) return false;
+      if (!result.data) { syncAuth(); return false; }
+      if (JSON.stringify(result.data) === JSON.stringify(state.staff)) return false;
+      state.staff = result.data;
+      renderUser(app);
+      renderSidebar(app);
+      return true;
     },
 
     /** Re-renderiza a rota atual mantendo rolagem e foco (após mudança de dados). */
     render() {
       const route = router.route;
-      if (!state.ready || route.name === 'new' || route.name === 'edit') return;
+      if (!state.ready || ['new', 'edit', 'permissions'].includes(route.name)) return;
       const key = document.activeElement?.dataset?.focusKey;
       const y = window.scrollY;
       showRoute(route, { navigated: false });
@@ -171,6 +190,8 @@ export function createApp(adapter, { isMock = false } = {}) {
       history: () => renderHistory(app, route.slug),
       admin: () => renderAdmin(app),
       staff: () => renderStaff(app),
+      member: () => renderMember(app, route.slug),
+      permissions: () => renderPermissions(app),
       notfound: () => renderMessage(app, { title: 'Página não encontrada', text: 'Volte para a lista de procedimentos.' }),
     };
     const mount = () => {
