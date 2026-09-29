@@ -51,9 +51,20 @@ export function adminLinks(app) {
     app.feature('avisos') && app.can('avisos.enviar')
       && { href: '#/avisos', ico: 'speakerphone', label: 'Avisos', count: 0, hint: 'Criar avisos e ver quem já leu.' },
     app.can('equipe.ver') && { href: '#/equipe', ico: 'users', label: 'Equipe da staff', hint: 'Membros, cargos, equipes e fichas.' },
+    app.feature('allowlist') && app.can('webhooks.gerenciar') && { href: '#/configuracoes/webhooks', ico: 'webhook', label: 'Webhooks do Discord', hint: 'Canais que recebem os resultados de allowlist e entrevistas.' },
     app.can('permissoes.editar') && { href: '#/permissoes', ico: 'shield-lock', label: 'Permissões dos cargos', hint: 'O que cada cargo pode fazer.' },
     app.feature('auditoria') && app.can('auditoria.ver') && { href: '#/auditoria', ico: 'history', label: 'Auditoria', hint: 'Registro das ações sensíveis.' },
     app.can('procedimentos.backup') && { href: '#/admin', ico: 'database-export', label: 'Exportar e importar', hint: 'Backup completo dos procedimentos.' },
+  ].filter(Boolean);
+}
+
+/** Etapa 6: seção "Allowlist" do menu (só com o módulo no banco). */
+export function allowlistLinks(app) {
+  if (!app.feature('allowlist')) return [];
+  return [
+    app.can('allowlist.avaliar') && { href: '#/allowlist', ico: 'file-check', label: 'Nova análise' },
+    app.can('allowlist.avaliar') && { href: '#/entrevista', ico: 'microphone', label: 'Nova entrevista' },
+    (app.can('allowlist.avaliar') || app.can('allowlist.historico')) && { href: '#/avaliacoes', ico: 'history', label: 'Histórico' },
   ].filter(Boolean);
 }
 
@@ -75,6 +86,11 @@ export function renderSidebar(app) {
     h('span', { class: 'cat-count' }, h('span', { class: 'sr-only' }, ', '), count, h('span', { class: 'sr-only' }, ' procedimentos'))));
 
   const links = adminLinks(app);
+  const al = allowlistLinks(app);
+  const navLink = ({ href, ico, label, count }) =>
+    h('a', { class: 'cat-item', href, 'data-nav': '', 'aria-current': String(app.router.route.hash === href) },
+      h('span', { class: 'cat-label' }, icon(ico), ' ', label),
+      count > 0 && h('span', { class: 'cat-count cat-count--alert' }, h('span', { class: 'sr-only' }, ', '), count, h('span', { class: 'sr-only' }, ' novos')));
 
   app.els.sidebar.replaceChildren(...[
     app.can('procedimentos.editar') && h('a', { class: 'btn btn--primary btn--block sidebar-new', href: '#/novo' }, icon('plus'), 'Novo procedimento'),
@@ -90,11 +106,11 @@ export function renderSidebar(app) {
         'aria-current': String(filters.status === 'arquivado'),
         onclick: () => app.setFilters({ status: filters.status === 'arquivado' ? '' : 'arquivado' }),
       }, h('span', { class: 'cat-label' }, 'Arquivados'), h('span', { class: 'cat-count' }, archivedCount))),
+    al.length > 0 && h('nav', { class: 'sidebar-tools', id: 'sidebar-allowlist', 'aria-labelledby': 'sidebar-al-title' },
+      h('h2', { class: 'sidebar-title', id: 'sidebar-al-title' }, 'Allowlist'),
+      al.map(navLink)),
     links.length > 0 && h('nav', { class: 'sidebar-tools', 'aria-labelledby': 'sidebar-admin-title' },
       h('h2', { class: 'sidebar-title', id: 'sidebar-admin-title' }, 'Administração'),
-      links.map(({ href, ico, label, count }) =>
-        h('a', { class: 'cat-item', href, 'data-nav': '', 'aria-current': String(app.router.route.hash === href) },
-          h('span', { class: 'cat-label' }, icon(ico), ' ', label),
-          count > 0 && h('span', { class: 'cat-count cat-count--alert' }, h('span', { class: 'sr-only' }, ', '), count, h('span', { class: 'sr-only' }, ' novos'))))),
+      links.map(navLink)),
   ].filter(Boolean));
 }

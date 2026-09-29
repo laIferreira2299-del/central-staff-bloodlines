@@ -9,7 +9,7 @@ import {
   AL_DEFAULTS, WEBHOOK_COLUMNS, pickAlAnswers, pickAlEvaluation, pickAlParticipants, pickWebhook,
 } from './adapter.js';
 import {
-  ALLOWLIST_ERRORS, MAX_PRINTS, printError, validateAlEvaluation, validateAlExtras, validateWebhook,
+  ALLOWLIST_ERRORS, DISCORD_SEND_ERRORS, MAX_PRINTS, printError, validateAlEvaluation, validateAlExtras, validateWebhook,
 } from '../core/allowlist.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
 import {
@@ -26,6 +26,7 @@ const EVALUATION_COLUMNS = 'id, period_id, evaluated_id, evaluator_id, status, c
 const WEBHOOK_SELECT = WEBHOOK_COLUMNS.join(', ');
 const ATTACHMENT_COLUMNS = 'id, evaluation_id, storage_path, file_name, mime, size, position, created_at';
 const PRINTS_BUCKET = 'al-prints';
+const FUNCTION_NAME = 'enviar-discord';
 
 /**
  * Busca do histórico → filtro "or" do PostgREST. Tira os caracteres que mudam a sintaxe
@@ -923,7 +924,35 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       if (error) return failFrom(error, status);
       return data?.length ? ok(null) : fail('NOT_FOUND', 'Webhook não encontrado.');
     },
+
+    /* ----- Etapa 7: envio ao Discord pela Edge Function (a url do webhook nunca vem ao site) ----- */
+    async sendAlToDiscord(evaluationId, { webhookId, resend = false } = {}) {
+      const { error: g } = await guard('allowlist.avaliar');
+      if (g) return g;
+      return invokeSend({ action: 'enviar', evaluation_id: evaluationId, webhook_id: webhookId, resend: Boolean(resend) });
+    },
+
+    async testDiscordWebhook(webhookId) {
+      const { error: g } = await guard('webhooks.gerenciar');
+      if (g) return g;
+      return invokeSend({ action: 'testar', webhook_id: webhookId });
+    },
   };
+
+  /**
+   * Chama a Edge Function enviar-discord. Ela responde { data, error } no formato do contrato;
+   * 404 da própria função = ainda não instalada no Supabase.
+   */
+  async function invokeSend(body) {
+    const { data, error } = await sb.functions.invoke(FUNCTION_NAME, { body });
+    if (!error) return data?.error ? fail(data.error.code, data.error.message, data.error.details) : ok(data?.data ?? null);
+    const response = error.context;
+    if (typeof response?.json !== 'function') return fail('NETWORK');
+    const payload = await response.json().catch(() => null);
+    if (payload?.error?.code) return fail(payload.error.code, payload.error.message, payload.error.details);
+    if (response.status === 404) return fail('NETWORK', DISCORD_SEND_ERRORS.missingFunction);
+    return failFrom({ message: payload?.message ?? error.message }, response.status);
+  }
 
   /* ---------- Etapa 5: apoio da Allowlist ---------- */
   const usesAllowlist = (can) => can('allowlist.avaliar') || can('allowlist.historico') || can('lore.gerenciar');

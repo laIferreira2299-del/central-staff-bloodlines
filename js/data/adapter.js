@@ -250,6 +250,13 @@
  * @property {(w: object) => Result<DiscordWebhook>} saveDiscordWebhook
  *           webhooks.gerenciar. Cria (url obrigatória) ou edita (url vazia = mantém a atual).
  * @property {(id: string) => Result<null>} deleteDiscordWebhook   webhooks.gerenciar.
+ *
+ * Etapa 7 · envio ao Discord (Edge Function enviar-discord; a url do webhook só é lida no servidor)
+ * @property {(evaluationId: string, o: { webhookId: string, resend?: boolean }) => Result<{ sent_to_discord_at: string, discord_status: string }>} sendAlToDiscord
+ *           allowlist.avaliar e só o autor (FORBIDDEN com ALLOWLIST_ERRORS.notAuthor). Webhook ativo da mesma
+ *           finalidade do tipo (senão VALIDATION webhook). Já enviada sem resend = VALIDATION alreadySent.
+ *           O Discord recusou = VALIDATION com DISCORD_SEND_ERRORS.discord(status). Mensagens em errors._.
+ * @property {(webhookId: string) => Result<null>} testDiscordWebhook   webhooks.gerenciar. Posta TEST_MESSAGE.
  */
 
 export const ERROR_CODES = Object.freeze({
@@ -277,6 +284,7 @@ export const ADAPTER_METHODS = Object.freeze([
   'listInterviewQuestions', 'listChecklistItems', 'listBlockedNames',
   'listAlEvaluations', 'getAlEvaluation', 'saveAlEvaluation', 'addAlPrint', 'removeAlPrint', 'getAlPrintUrls',
   'listDiscordWebhooks', 'saveDiscordWebhook', 'deleteDiscordWebhook',
+  'sendAlToDiscord', 'testDiscordWebhook',
 ]);
 
 /** Campos da análise que o cliente pode definir (o resto é do servidor). */

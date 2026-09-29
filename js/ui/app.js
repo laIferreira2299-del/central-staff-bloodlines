@@ -22,6 +22,9 @@ import { renderMarkdownInto } from '../core/render-md.js';
 import { openDialog } from './modal.js';
 import { renderPermissions } from './views/permissions.js';
 import { renderMessage } from './views/message.js';
+import { renderAlForm } from './views/allowlist.js';
+import { renderAlDetail, renderAlHistory } from './views/al-history.js';
+import { renderWebhooks } from './views/webhooks.js';
 
 const SEARCH_DEBOUNCE_MS = 150;
 const EMPTY_FILTERS = Object.freeze({ category: '', audience: '', status: '', favoritesOnly: false });
@@ -168,7 +171,7 @@ export function createApp(adapter, { isMock = false } = {}) {
     /** Re-renderiza a rota atual mantendo rolagem e foco (após mudança de dados). */
     render() {
       const route = router.route;
-      if (!state.ready || ['new', 'edit', 'permissions', 'evaluation', 'evaluations', 'announcements', 'proposal'].includes(route.name)) return;
+      if (!state.ready || ['new', 'edit', 'permissions', 'evaluation', 'evaluations', 'announcements', 'proposal', 'alForm', 'interview', 'alHistory', 'alDetail', 'webhooks'].includes(route.name)) return;
       const key = document.activeElement?.dataset?.focusKey;
       const y = window.scrollY;
       showRoute(route, { navigated: false });
@@ -295,6 +298,11 @@ export function createApp(adapter, { isMock = false } = {}) {
       panel: () => renderPanel(app),
       member: () => renderMember(app, route.slug),
       permissions: () => renderPermissions(app),
+      alForm: () => renderAlForm(app, 'allowlist', route.slug ?? null),
+      interview: () => renderAlForm(app, 'entrevista', route.slug ?? null),
+      alHistory: () => renderAlHistory(app),
+      alDetail: () => renderAlDetail(app, route.slug),
+      webhooks: () => renderWebhooks(app),
       notfound: () => renderMessage(app, { title: 'Página não encontrada', text: 'Volte para a lista de procedimentos.' }),
     };
     const mount = () => {

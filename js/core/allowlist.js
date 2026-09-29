@@ -559,6 +559,30 @@ export function buildDiscordMessages(ev, { responsibleName = '', answers = [], p
   }));
 }
 
+/* ======================= Etapa 7: envio pela Edge Function enviar-discord ======================= */
+/** Mensagens do envio. Iguais na Edge Function (gerada deste arquivo) e no mock. */
+export const DISCORD_SEND_ERRORS = Object.freeze({
+  alreadySent: 'Esta análise já foi enviada ao Discord. Confirme para enviar de novo.',
+  webhook: 'Webhook inativo, removido ou de outra finalidade. Escolha outro canal.',
+  noWebhook: 'Nenhum webhook configurado. Peça a um administrador para cadastrar em Configurações › Webhooks.',
+  missingFunction: 'A função de envio ainda não foi instalada no Supabase. Avise a administração.',
+  discord: (status) => `O Discord recusou o envio (HTTP ${status}). O webhook pode ter sido apagado no Discord.`,
+});
+export const TEST_MESSAGE = '✓ Teste de conexão — Bloodlines RP · Central da Staff';
+
+/** Texto gravado em discord_status (até 300 caracteres). */
+export const sentStatus = (webhookName, extra = '') => `enviado para ${clean(webhookName)}${extra ? ` · ${extra}` : ''}`.slice(0, 300);
+
+/**
+ * Corpo multipart de uma mensagem de buildDiscordMessages: payload_json (sem a lista de nomes)
+ * + attachments com o nome de cada arquivo. Os blobs vão em files[0], files[1]...
+ * @param {{ files: string[] } & object} message
+ */
+export function discordPayload(message) {
+  const { files = [], ...rest } = message;
+  return files.length ? { ...rest, attachments: files.map((filename, id) => ({ id, filename })) } : rest;
+}
+
 /* ======================= Validação (mesmas regras dos CHECKs do 10) ======================= */
 const DISCORD_ID = /^[0-9]{17,20}$/;
 /** Mesmo padrão do trigger kb_discord_webhooks_before_write. */

@@ -18,6 +18,12 @@ const ROUTES = [
   ['announcements', /^#\/avisos(?:#aviso-[0-9a-f-]{36})?$/],
   ['audit', /^#\/auditoria$/],
   ['panel', /^#\/painel$/],
+  // Etapas 6 e 7 · Allowlist e Entrevistas
+  ['alForm', /^#\/allowlist(?:\/([0-9a-f-]{36}))?$/],
+  ['interview', /^#\/entrevista(?:\/([0-9a-f-]{36}))?$/],
+  ['alHistory', /^#\/avaliacoes$/],
+  ['alDetail', /^#\/avaliacoes\/([0-9a-f-]{36})$/],
+  ['webhooks', /^#\/configuracoes\/webhooks$/],
 ];
 
 /** @returns {{ name: string, slug?: string, hash: string }} */

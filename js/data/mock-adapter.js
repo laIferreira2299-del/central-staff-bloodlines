@@ -8,7 +8,8 @@ import {
   AL_DEFAULTS, WEBHOOK_COLUMNS, pickAlAnswers, pickAlEvaluation, pickAlParticipants, pickWebhook,
 } from './adapter.js';
 import {
-  ALLOWLIST_ERRORS, MAX_PRINTS, normalizeName, printError, validateAlEvaluation, validateAlExtras, validateWebhook,
+  ALLOWLIST_ERRORS, DISCORD_SEND_ERRORS, MAX_PRINTS, normalizeName, printError, sentStatus, validateAlEvaluation,
+  validateAlExtras, validateWebhook,
 } from '../core/allowlist.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
 import {
@@ -1047,6 +1048,26 @@ export function createMockAdapter({
         save();
         return ok(null);
       });
+    },
+
+    /* ----- Etapa 7: envio ao Discord (simulado; o de verdade é a Edge Function) ----- */
+    async sendAlToDiscord(evaluationId, { webhookId, resend = false } = {}) {
+      return run('sendAlToDiscord', 'allowlist.avaliar', async ({ staff, can }) => {
+        const e = state.alEvaluations.find((x) => x.id === evaluationId);
+        if (!e || !seesEval(e, staff, can)) return evalNotFound();
+        if (e.created_by !== staff.discord_id) return fail('FORBIDDEN', ALLOWLIST_ERRORS.notAuthor);
+        if (e.sent_to_discord_at && !resend) return validationError({ _: DISCORD_SEND_ERRORS.alreadySent });
+        const w = state.webhooks.find((x) => x.id === webhookId);
+        if (!w || !w.active || w.purpose !== e.kind) return validationError({ _: DISCORD_SEND_ERRORS.webhook });
+        Object.assign(e, { sent_to_discord_at: nowIso(), discord_status: sentStatus(w.name) });
+        save();
+        return ok({ sent_to_discord_at: e.sent_to_discord_at, discord_status: e.discord_status });
+      });
+    },
+
+    async testDiscordWebhook(webhookId) {
+      return run('testDiscordWebhook', 'webhooks.gerenciar', async () => (
+        state.webhooks.some((w) => w.id === webhookId) ? ok(null) : fail('NOT_FOUND', 'Webhook não encontrado.')));
     },
   };
 
