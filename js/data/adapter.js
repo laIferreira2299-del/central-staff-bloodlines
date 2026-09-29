@@ -74,7 +74,7 @@
  * @typedef {'allowlist'|'lore'} Team
  * @typedef {{ discord_id: string, display_name: string, role: Role, level: number, teams: Team[], permissions: string[], features: string[] }} Staff
  *           permissions = permissões efetivas (cargo + TAGs; CEO = todas), em ordem alfabética.
- *           features = módulos que o banco já tem ('aprovacao', 'auditoria', 'avaliacoes', 'avisos');
+ *           features = módulos que o banco já tem ('allowlist', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos');
  *           a tela de cada módulo só aparece quando o SQL dele já rodou.
  * @typedef {{ discord_id: string, display_name: string, role: Role, teams: Team[], active: boolean, created_at: string }} StaffMember
  * @typedef {{ user: { id: string, discord_id: string|null, name: string, avatar_url: string|null } }} Session
@@ -229,7 +229,7 @@ export const ADAPTER_METHODS = Object.freeze([
 ]);
 
 /** Módulos que o banco pode ter (Staff.features). */
-export const FEATURES = Object.freeze(['aprovacao', 'auditoria', 'avaliacoes', 'avisos']);
+export const FEATURES = Object.freeze(['allowlist', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos']);
 
 /** Campos que o cliente pode definir. Todo o resto é do servidor. */
 export const EDITABLE_FIELDS = Object.freeze([

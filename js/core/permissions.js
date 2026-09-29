@@ -59,6 +59,7 @@ export const PERMISSIONS = Object.freeze([
   { code: 'auditoria.ver', description: 'Ver o registro de ações sensíveis', roles: DIRECTION },
   { code: 'permissoes.editar', description: 'Ligar e desligar permissões dos cargos', roles: [], ceoOnly: true },
   { code: 'configuracoes.editar', description: 'Configurações gerais do site', roles: DIRECTION },
+  { code: 'webhooks.gerenciar', description: 'Cadastrar, editar e remover webhooks do Discord', roles: DIRECTION },
 ].map((p) => Object.freeze({ ceoOnly: false, ...p, roles: Object.freeze([...p.roles]) })));
 
 export const PERMISSION_CODES = Object.freeze(PERMISSIONS.map((p) => p.code));
