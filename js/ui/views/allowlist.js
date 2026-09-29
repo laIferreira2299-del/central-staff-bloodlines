@@ -19,6 +19,8 @@ const FLAG_TONE = { ev1: 'ok', ev2: 'ok', ev3: 'bad', ev4: 'bad', ev5: 'warn' };
 const FLAG_MARK = { ev1: 'ꪜ', ev2: 'ꪜ', ev3: '✘', ev4: '✘', ev5: '⚠' };
 const TITLES = { allowlist: 'Análise de allowlist', entrevista: 'Entrevista' };
 const BASE = { allowlist: '#/allowlist', entrevista: '#/entrevista' };
+/** Checklist da entrevista aberto ou fechado: só na memória desta aba (começa fechado). */
+let checklistOpen = false;
 
 /** Sem o módulo no banco ou sem allowlist.avaliar: mensagem e nada mais. */
 export function alDenied(app, need = 'allowlist.avaliar') {
@@ -311,11 +313,11 @@ export function renderAlForm(app, kind, id = null) {
     const gabarito = kind === 'entrevista' ? gabaritoSection() : null;
 
     function checklistSection() {
-      const summary = h('p', { class: 'panel-text', id: 'al-checklist-progress', 'aria-live': 'polite' });
+      const summary = h('span', { class: 'al-checklist-count', id: 'al-checklist-progress', 'aria-live': 'polite' });
       const list = h('div', { class: 'al-checklist' });
       function draw() {
         const p = checklistProgress(config.items, st.checked);
-        summary.textContent = `${p.done} de ${p.total} itens concluídos`;
+        summary.textContent = `(${p.done}/${p.total} itens concluídos)`;
         summary.classList.toggle('is-complete', p.complete);
         list.replaceChildren(...p.stages.map((s) => h('fieldset', { class: 'al-stage' },
           h('legend', { class: 'al-stage-title' }, `Etapa ${String(s.stage).padStart(2, '0')} — ${s.title}`),
@@ -330,11 +332,7 @@ export function renderAlForm(app, kind, id = null) {
       draw();
       return {
         draw,
-        el: h('section', { class: 'panel', 'aria-labelledby': 'al-checklist-title' },
-          h('h2', { class: 'block-title', id: 'al-checklist-title' }, icon('list-check'), 'Checklist da entrevista'),
-          summary, list,
-          h('div', { class: 'field' }, h('label', { class: 'field-label', for: 'al-notes' }, 'Observações'), notesIn,
-            h('p', { class: 'field-hint' }, 'Vão no envio da entrevista para o Discord.'), fieldError('notes')),
+        el: collapsible(summary, h('div', { class: 'al-checklist-body', id: 'al-checklist-body', hidden: !checklistOpen }, list,
           h('div', { class: 'panel-actions' }, h('button', { type: 'button', class: 'btn btn--ghost', id: 'al-checklist-reset', onclick: async () => {
             if (!await confirmDialog({ title: 'Reiniciar o checklist?', message: 'Desmarca todos os itens e apaga as Observações.', confirmLabel: 'Reiniciar', danger: true })) return;
             st.checked.clear();
@@ -342,8 +340,22 @@ export function renderAlForm(app, kind, id = null) {
             notesIn.value = '';
             touch();
             draw();
-          } }, icon('refresh'), 'Reiniciar checklist'))),
+          } }, icon('refresh'), 'Reiniciar checklist')))),
       };
+    }
+
+    /** Cabeçalho clicável que abre e fecha o checklist (fechado por padrão). */
+    function collapsible(summary, content) {
+      const toggle = h('button', {
+        type: 'button', class: 'al-collapse', id: 'al-checklist-toggle', 'aria-expanded': String(checklistOpen), 'aria-controls': 'al-checklist-body',
+        onclick: () => {
+          checklistOpen = !checklistOpen;
+          toggle.setAttribute('aria-expanded', String(checklistOpen));
+          content.hidden = !checklistOpen;
+        },
+      }, h('span', { class: 'al-collapse-mark', 'aria-hidden': 'true' }, '›'), ' Checklist da entrevista ', summary);
+      return h('section', { class: 'panel al-checklist-panel', 'aria-labelledby': 'al-checklist-toggle' },
+        h('h2', { class: 'block-title al-collapse-title' }, toggle), content);
     }
 
     function gabaritoSection() {
@@ -527,14 +539,20 @@ export function renderAlForm(app, kind, id = null) {
       h('div', { class: 'al-flags', role: 'group', 'aria-labelledby': 'al-eval-title' }, flagBtns),
       h('div', { class: 'al-statuses', role: 'group', 'aria-label': 'Resultado' }, approveBtn, rejectBtn),
       reasonField,
-      kind === 'allowlist' && h('div', { class: 'field' }, h('label', { class: 'field-label', for: 'al-notes' }, 'Observações'), notesIn, fieldError('notes')));
+      h('div', { class: 'field' }, h('label', { class: 'field-label', for: 'al-notes' }, 'Observações'), notesIn,
+        kind === 'entrevista' && h('p', { class: 'field-hint' }, 'Vão no envio da entrevista para o Discord.'), fieldError('notes')));
     const printsPanel = h('section', { class: 'panel', 'aria-labelledby': 'al-prints-title' },
       h('h2', { class: 'block-title', id: 'al-prints-title' }, icon('photo'), 'Prints da avaliação'), prints.el);
     const actions = h('div', { class: 'form-actions al-actions' }, newBtn, saveBtn, send);
 
-    const formCol = h('div', { class: 'al-form' }, identity, team,
-      kind === 'entrevista' && checklist.el, printsPanel, evaluation, kind === 'entrevista' && gabarito.el, errorEl, actions);
-    body.replaceChildren(kind === 'allowlist' ? h('div', { class: 'al-grid' }, formCol, previewWrap) : formCol);
+    if (kind === 'allowlist') {
+      body.replaceChildren(h('div', { class: 'al-grid' }, h('div', { class: 'al-form' }, identity, printsPanel, evaluation, errorEl, actions), previewWrap));
+    } else {
+      // Entrevista: esquerda fixa (dados, participantes, avaliação, prints e botões); direita com checklist e perguntas.
+      body.replaceChildren(h('div', { class: 'al-interview' },
+        h('div', { class: 'al-form al-interview-side' }, identity, team, evaluation, printsPanel, errorEl, actions),
+        h('div', { class: 'al-form al-interview-main' }, checklist.el, gabarito.el)));
+    }
     update('init');
     app.applyOnline();
     app.router.setGuard(async () => {

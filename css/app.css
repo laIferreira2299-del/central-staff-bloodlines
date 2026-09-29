@@ -1230,3 +1230,29 @@ input[type="file"].input::file-selector-button {
   position: static; flex-wrap: wrap; justify-content: flex-start; padding: 0; background: none; border-top: 0;
 }
 .staff-filters[hidden] { display: none; }
+
+/* ---------- Entrevista: esquerda fixa (380 px) e direita com checklist + perguntas ---------- */
+.al-interview { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: var(--space-5); align-items: start; }
+.al-interview-side {
+  position: sticky; top: calc(var(--topbar-h) + var(--space-4));
+  max-height: calc(100vh - var(--topbar-h) - var(--space-8)); overflow-y: auto; overscroll-behavior: contain;
+  padding-right: var(--space-1);
+}
+.al-collapse-title { margin: 0; }
+.al-collapse {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); width: 100%;
+  padding: 0; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.al-collapse:focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; border-radius: var(--radius-sm); }
+.al-collapse-mark { display: inline-block; transition: transform var(--dur) var(--ease); }
+.al-collapse[aria-expanded="true"] .al-collapse-mark { transform: rotate(90deg); }
+.al-checklist-count { color: var(--text-2); font-family: var(--font-body); font-size: var(--fs-sm); font-weight: 400; text-transform: none; letter-spacing: 0; }
+.al-checklist-count.is-complete { color: var(--ok); }
+.al-checklist-body[hidden] { display: none; }
+@media (max-width: 767.98px) {
+  .al-interview { grid-template-columns: minmax(0, 1fr); }
+  .al-interview-side { position: static; max-height: none; overflow: visible; padding-right: 0; }
+}
+.al-interview-side .staff-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.al-interview-side .al-inline { flex-wrap: wrap; }
+.al-interview-side .al-actions { flex-wrap: wrap; justify-content: flex-start; padding: var(--space-3) 0; }
