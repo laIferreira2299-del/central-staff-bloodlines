@@ -1254,5 +1254,52 @@ input[type="file"].input::file-selector-button {
   .al-interview-side { position: static; max-height: none; overflow: visible; padding-right: 0; }
 }
 .al-interview-side .staff-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.al-interview-side .al-inline { flex-wrap: wrap; }
 .al-interview-side .al-actions { flex-wrap: wrap; justify-content: flex-start; padding: var(--space-3) 0; }
+
+/* ---------- Entrevista: cartão compacto (Entrevistado, Participantes, Avaliação) ---------- */
+.al-compact { gap: 0; padding: var(--space-4); }
+.al-block { display: grid; gap: var(--space-2); }
+.al-block + .al-block { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border); }
+.al-block-title {
+  margin: 0; color: var(--text-2); font-family: var(--font-body); font-size: var(--fs-xs); font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase;
+}
+.al-responsible { margin: 0; color: var(--text-2); font-size: var(--fs-sm); }
+.al-compact .staff-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2) var(--space-3); }
+.al-compact .field { gap: 2px; }
+.al-compact .field-label { font-size: var(--fs-xs); }
+.al-compact .input, .al-compact .textarea { padding: 6px 10px; font-size: var(--fs-sm); }
+.al-compact .field--character_name { grid-column: 1 / -1; order: -1; }
+.al-compact .field--character_name .input { font-size: var(--fs-base); font-weight: 600; }
+.al-compact .al-inline { flex-wrap: nowrap; }
+.al-compact .al-inline .btn { flex: none; padding-inline: var(--space-2); }
+.al-compact .banner { margin: 0; font-size: var(--fs-sm); }
+
+.al-team-add { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--space-2); align-items: center; }
+.al-team-add select.input { width: auto; }
+.al-compact .al-team { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.al-compact .al-team:empty { display: none; }
+.al-compact .al-team-item {
+  display: inline-flex; gap: var(--space-1); padding: 2px 4px 2px 10px; font-size: var(--fs-sm);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px;
+}
+.al-team-remove {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0;
+  color: var(--text-2); background: none; border: 0; border-radius: 50%; cursor: pointer; font-size: var(--fs-md); line-height: 1;
+}
+.al-team-remove:hover, .al-team-remove:focus-visible { color: var(--text); background: var(--surface-3); }
+
+.al-flag-grid { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-1) var(--space-2); align-items: center; }
+.al-flag-row-label { color: var(--text-2); font-size: var(--fs-sm); font-weight: 600; min-width: 3.5em; }
+.al-flag-grid .al-flag { justify-content: center; padding: 6px var(--space-2); font-size: var(--fs-sm); }
+.al-flag-grid #al-ev5 { grid-column: 2 / -1; }
+.al-compact .al-statuses { margin: var(--space-1) 0 0; }
+.al-compact .al-status { padding: 8px var(--space-2); font-size: var(--fs-sm); }
+.al-compact .input { min-height: 34px; }
+.al-compact .al-inline .btn, .al-team-add .btn { min-height: 34px; }
+.al-compact .al-statuses { grid-template-columns: 1fr 1fr; }
+@media (max-width: 519.98px) {
+  .al-team-add { grid-template-columns: minmax(0, 1fr) auto; }
+  .al-team-add #al-team-who { grid-column: 1 / -1; }
+  .al-team-add select.input { width: 100%; }
+}

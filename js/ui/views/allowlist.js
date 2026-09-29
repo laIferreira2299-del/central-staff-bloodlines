@@ -17,6 +17,9 @@ import { renderMessage } from './message.js';
 
 const FLAG_TONE = { ev1: 'ok', ev2: 'ok', ev3: 'bad', ev4: 'bad', ev5: 'warn' };
 const FLAG_MARK = { ev1: 'ꪜ', ev2: 'ꪜ', ev3: '✘', ev4: '✘', ev5: '⚠' };
+/** Entrevista: grade compacta Regras/Lore × Bom/Não sabe (os pares se excluem) + personagem. */
+const FLAG_GRID = [['Regras', 'ev1', 'ev4'], ['Lore', 'ev2', 'ev3']];
+const FLAG_SHORT = { ev1: '✓ Bom', ev2: '✓ Bom', ev3: '✗ Não sabe', ev4: '✗ Não sabe', ev5: '⚠ Personagem mal desenvolvido' };
 const TITLES = { allowlist: 'Análise de allowlist', entrevista: 'Entrevista' };
 const BASE = { allowlist: '#/allowlist', entrevista: '#/entrevista' };
 /** Checklist da entrevista aberto ou fechado: só na memória desta aba (começa fechado). */
@@ -155,13 +158,13 @@ function printsBox(initial, onChange) {
 function participantsPanel(staff, list, myId, onChange) {
   const nameOf = (id) => staff.find((s) => s.discord_id === id)?.display_name ?? id;
   const ul = h('ul', { class: 'al-team', id: 'al-team' });
-  const who = h('input', { class: 'input', id: 'al-team-who', list: 'al-team-staff', autocomplete: 'off', placeholder: 'Nome da staff ou Discord ID' });
+  const who = h('input', { class: 'input', id: 'al-team-who', list: 'al-team-staff', autocomplete: 'off', placeholder: 'Nome ou Discord ID' });
   const role = h('select', { class: 'input', id: 'al-team-role', 'aria-label': 'Papel' },
     h('option', { value: 'entrevistador' }, 'Entrevistador'), h('option', { value: 'acompanhante' }, 'Acompanhante'));
   const err = h('p', { class: 'field-error', id: 'al-team-err', role: 'alert', hidden: true });
   const draw = () => ul.replaceChildren(...list.map((p, i) => h('li', { class: 'al-team-item' },
     h('span', {}, h('strong', {}, nameOf(p.discord_id)), ` · ${p.role === 'acompanhante' ? 'Acompanhante' : 'Entrevistador'}`),
-    h('button', { type: 'button', class: 'btn btn--sm btn--ghost', 'aria-label': `Tirar ${nameOf(p.discord_id)}`, onclick: () => { list.splice(i, 1); onChange(); draw(); } }, icon('x')))));
+    h('button', { type: 'button', class: 'al-team-remove', 'aria-label': `Tirar ${nameOf(p.discord_id)}`, onclick: () => { list.splice(i, 1); onChange(); draw(); } }, '×'))));
   const add = () => {
     const v = who.value.trim();
     const id = staff.find((s) => s.display_name.toLowerCase() === v.toLowerCase())?.discord_id ?? v;
@@ -175,11 +178,12 @@ function participantsPanel(staff, list, myId, onChange) {
   };
   who.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
   draw();
-  return h('section', { class: 'panel', 'aria-labelledby': 'al-team-title' },
-    h('h2', { class: 'block-title', id: 'al-team-title' }, icon('users'), 'Entrevistadores e acompanhantes'),
-    h('p', { class: 'panel-text' }, 'Quem participou com você. Conta no painel de produtividade (acompanhante numa coluna à parte).'),
+  return h('div', { class: 'al-block' },
+    h('h3', { class: 'al-block-title', id: 'al-team-title' }, 'Participantes'),
     h('datalist', { id: 'al-team-staff' }, staff.filter((s) => s.discord_id !== myId).map((s) => h('option', { value: s.display_name }))),
-    h('div', { class: 'al-inline' }, who, role, h('button', { type: 'button', class: 'btn', id: 'al-team-add', onclick: add }, icon('plus'), 'Adicionar')),
+    h('div', { class: 'al-team-add' }, who, role,
+      h('button', { type: 'button', class: 'btn btn--sm', id: 'al-team-add', 'aria-label': 'Adicionar participante', title: 'Adicionar', onclick: add }, icon('plus'))),
+    h('p', { class: 'field-hint' }, 'Entrevistadores e acompanhantes. Contam no painel de produtividade.'),
     err, ul);
 }
 
@@ -245,7 +249,7 @@ export function renderAlForm(app, kind, id = null) {
         inputmode: mode, min: type === 'number' ? 1 : null, max: type === 'number' ? 120 : null, autocomplete: 'off',
       });
       input.addEventListener('input', () => { st[key] = input.value; touch(); update(key); });
-      return { input, el: h('div', { class: 'field' }, h('label', { class: 'field-label', for: `al-${key}` }, label),
+      return { input, el: h('div', { class: `field field--${key}` }, h('label', { class: 'field-label', for: `al-${key}` }, label),
         extra ? h('div', { class: 'al-inline' }, input, extra) : input, fieldError(key)) };
     };
     const nowBtn = h('button', { type: 'button', class: 'btn btn--sm', id: 'al-now', onclick: () => {
@@ -266,8 +270,10 @@ export function renderAlForm(app, kind, id = null) {
     const nameBanner = h('div', { class: 'banner', id: 'al-name-check', role: 'status', hidden: true });
 
     /* ---------- avaliação e status ---------- */
+    const compact = kind === 'entrevista';
     const flagBtns = Object.entries(EVAL_FLAGS).map(([flag, text]) => h('button', {
       type: 'button', class: `al-flag al-flag--${FLAG_TONE[flag]}`, id: `al-${flag}`, 'aria-pressed': 'false',
+      'aria-label': compact ? text : null, title: compact ? text : null,
       onclick: () => {
         st.eval_flags = toggleFlag(st.eval_flags, flag);
         st.status = nextStatus(st.status, st.eval_flags, age());
@@ -275,7 +281,7 @@ export function renderAlForm(app, kind, id = null) {
         touch();
         update('flags');
       },
-    }, h('span', { 'aria-hidden': 'true' }, FLAG_MARK[flag]), flag === 'ev5' && kind === 'allowlist' ? `${text} — sugerimos que refaça a allowlist` : text));
+    }, compact ? FLAG_SHORT[flag] : [h('span', { 'aria-hidden': 'true' }, FLAG_MARK[flag]), flag === 'ev5' && kind === 'allowlist' ? `${text} — sugerimos que refaça a allowlist` : text]));
     const statusBtn = (value, text) => h('button', {
       type: 'button', class: `al-status al-status--${value}`, id: `al-status-${value}`, 'aria-pressed': 'false',
       onclick: () => {
@@ -287,13 +293,13 @@ export function renderAlForm(app, kind, id = null) {
     }, text);
     const approveBtn = statusBtn('aprovado', '✓ Aprovada');
     const rejectBtn = statusBtn('reprovado', '✗ Reprovada');
-    const reasonIn = h('textarea', { class: 'textarea', id: 'al-reason', rows: 4, maxlength: AL_LIMITS.reason });
+    const reasonIn = h('textarea', { class: 'textarea', id: 'al-reason', rows: kind === 'entrevista' ? 3 : 4, maxlength: AL_LIMITS.reason });
     reasonIn.addEventListener('input', () => { st.reason = reasonIn.value; touch(); update('reason'); });
     const reasonField = h('div', { class: 'field', hidden: true },
       h('label', { class: 'field-label', for: 'al-reason' }, 'Motivo da reprovação'), reasonIn,
       h('p', { class: 'field-hint' }, 'Preenchido sozinho pela avaliação; pode ajustar o texto.'), fieldError('reason'));
     const notesIn = h('textarea', {
-      class: 'textarea', id: 'al-notes', rows: kind === 'entrevista' ? 4 : 3, maxlength: AL_LIMITS.notes,
+      class: 'textarea', id: 'al-notes', rows: 3, maxlength: AL_LIMITS.notes,
       placeholder: kind === 'entrevista'
         ? 'Anote aqui qualquer observação sobre o player: comportamento, pontos de atenção, dificuldades, destaques...'
         : 'Observações internas sobre a análise (vão no card do Discord).',
@@ -528,19 +534,31 @@ export function renderAlForm(app, kind, id = null) {
       onSent: (_r, savedId) => { dirty = false; app.router.clearGuard(); app.router.go(`#/avaliacoes/${savedId}`); },
     });
 
-    const identity = h('section', { class: 'panel', 'aria-labelledby': 'al-id-title' },
+    const flagById = Object.fromEntries(flagBtns.map((b) => [b.id.slice(3), b]));
+    const flagsEl = compact
+      ? h('div', { class: 'al-flag-grid', role: 'group', 'aria-labelledby': 'al-eval-title' },
+        FLAG_GRID.map(([label, good, bad]) => [h('span', { class: 'al-flag-row-label' }, label), flagById[good], flagById[bad]]),
+        flagById.ev5)
+      : h('div', { class: 'al-flags', role: 'group', 'aria-labelledby': 'al-eval-title' }, flagBtns);
+    const notesField = h('div', { class: 'field' }, h('label', { class: 'field-label', for: 'al-notes' }, 'Observações'), notesIn,
+      compact && h('p', { class: 'field-hint' }, 'Vão no envio para o Discord.'), fieldError('notes'));
+    const fieldsGrid = h('div', { class: 'staff-form-grid' }, Object.values(f).filter(Boolean).map((x) => x.el));
+    const statuses = h('div', { class: 'al-statuses', role: 'group', 'aria-label': 'Resultado' }, approveBtn, rejectBtn);
+    // Entrevista: um cartão só, em três blocos compactos.
+    const block = (id, title, ...children) => h('div', { class: 'al-block' }, h('h3', { class: 'al-block-title', id }, title), ...children);
+    const interviewCard = compact && h('section', { class: 'panel al-compact', id: 'al-interview-card', 'aria-label': 'Entrevista' },
+      block('al-id-title', 'Entrevistado',
+        h('p', { class: 'al-responsible', id: 'al-responsible' }, 'Responsável: ', h('strong', {}, me.display_name), ' (você)'),
+        fieldsGrid, minorBanner, nameBanner),
+      participantsPanel(config.staff, st.participants, me.discord_id, touch),
+      block('al-eval-title', 'Avaliação', flagsEl, statuses, reasonField, notesField));
+    const identity = !compact && h('section', { class: 'panel', 'aria-labelledby': 'al-id-title' },
       h('h2', { class: 'block-title', id: 'al-id-title' }, icon('id-badge-2'), kind === 'allowlist' ? 'Dados da allowlist' : 'Identificação do entrevistado'),
       h('p', { class: 'panel-text', id: 'al-responsible' }, 'Responsável: ', h('strong', {}, me.display_name), ' (você)'),
-      h('div', { class: 'staff-form-grid' }, Object.values(f).filter(Boolean).map((x) => x.el)),
-      minorBanner, nameBanner);
-    const team = kind === 'entrevista' ? participantsPanel(config.staff, st.participants, me.discord_id, touch) : null;
-    const evaluation = h('section', { class: 'panel', 'aria-labelledby': 'al-eval-title' },
+      fieldsGrid, minorBanner, nameBanner);
+    const evaluation = !compact && h('section', { class: 'panel', 'aria-labelledby': 'al-eval-title' },
       h('h2', { class: 'block-title', id: 'al-eval-title' }, icon('checklist'), 'Avaliação do candidato'),
-      h('div', { class: 'al-flags', role: 'group', 'aria-labelledby': 'al-eval-title' }, flagBtns),
-      h('div', { class: 'al-statuses', role: 'group', 'aria-label': 'Resultado' }, approveBtn, rejectBtn),
-      reasonField,
-      h('div', { class: 'field' }, h('label', { class: 'field-label', for: 'al-notes' }, 'Observações'), notesIn,
-        kind === 'entrevista' && h('p', { class: 'field-hint' }, 'Vão no envio da entrevista para o Discord.'), fieldError('notes')));
+      flagsEl, statuses, reasonField, notesField);
     const printsPanel = h('section', { class: 'panel', 'aria-labelledby': 'al-prints-title' },
       h('h2', { class: 'block-title', id: 'al-prints-title' }, icon('photo'), 'Prints da avaliação'), prints.el);
     const actions = h('div', { class: 'form-actions al-actions' }, newBtn, saveBtn, send);
@@ -550,7 +568,7 @@ export function renderAlForm(app, kind, id = null) {
     } else {
       // Entrevista: esquerda fixa (dados, participantes, avaliação, prints e botões); direita com checklist e perguntas.
       body.replaceChildren(h('div', { class: 'al-interview' },
-        h('div', { class: 'al-form al-interview-side' }, identity, team, evaluation, printsPanel, errorEl, actions),
+        h('div', { class: 'al-form al-interview-side' }, interviewCard, printsPanel, errorEl, actions),
         h('div', { class: 'al-form al-interview-main' }, checklist.el, gabarito.el)));
     }
     update('init');
