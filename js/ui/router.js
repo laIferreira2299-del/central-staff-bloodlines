@@ -24,6 +24,12 @@ const ROUTES = [
   ['alHistory', /^#\/avaliacoes$/],
   ['alDetail', /^#\/avaliacoes\/([0-9a-f-]{36})$/],
   ['webhooks', /^#\/configuracoes\/webhooks$/],
+  // Etapas 8 a 10 · gabarito, Lore e produtividade
+  ['gabarito', /^#\/gabarito$/],
+  ['loreNames', /^#\/lore\/nomes$/],
+  ['characters', /^#\/lore\/personagens$/],
+  ['character', /^#\/lore\/personagens\/([0-9a-f-]{36}|novo)$/],
+  ['productivity', /^#\/controle$/],
 ];
 
 /** @returns {{ name: string, slug?: string, hash: string }} */

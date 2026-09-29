@@ -51,6 +51,7 @@ export function adminLinks(app) {
     app.feature('avisos') && app.can('avisos.enviar')
       && { href: '#/avisos', ico: 'speakerphone', label: 'Avisos', count: 0, hint: 'Criar avisos e ver quem já leu.' },
     app.can('equipe.ver') && { href: '#/equipe', ico: 'users', label: 'Equipe da staff', hint: 'Membros, cargos, equipes e fichas.' },
+    app.feature('produtividade') && app.can('produtividade.ver') && { href: '#/controle', ico: 'chart-bar', label: 'Produtividade', hint: 'Quem mais lê allowlist e faz entrevista.' },
     app.feature('allowlist') && app.can('webhooks.gerenciar') && { href: '#/configuracoes/webhooks', ico: 'webhook', label: 'Webhooks do Discord', hint: 'Canais que recebem os resultados de allowlist e entrevistas.' },
     app.can('permissoes.editar') && { href: '#/permissoes', ico: 'shield-lock', label: 'Permissões dos cargos', hint: 'O que cada cargo pode fazer.' },
     app.feature('auditoria') && app.can('auditoria.ver') && { href: '#/auditoria', ico: 'history', label: 'Auditoria', hint: 'Registro das ações sensíveis.' },
@@ -65,6 +66,17 @@ export function allowlistLinks(app) {
     app.can('allowlist.avaliar') && { href: '#/allowlist', ico: 'file-check', label: 'Nova análise' },
     app.can('allowlist.avaliar') && { href: '#/entrevista', ico: 'microphone', label: 'Nova entrevista' },
     (app.can('allowlist.avaliar') || app.can('allowlist.historico')) && { href: '#/avaliacoes', ico: 'history', label: 'Histórico' },
+    app.can('lore.gerenciar') && { href: '#/gabarito', ico: 'list-check', label: 'Gabarito e checklist' },
+  ].filter(Boolean);
+}
+
+/** Etapas 8 e 9: seção "Lore" do menu (nomes proibidos com o módulo de allowlist; personagens com o 12_lore.sql). */
+export function loreLinks(app) {
+  const sees = app.can('lore.consultar') || app.can('lore.gerenciar');
+  if (!sees || !app.feature('allowlist')) return [];
+  return [
+    app.feature('lore') && { href: '#/lore/personagens', ico: 'users-group', label: 'Personagens' },
+    { href: '#/lore/nomes', ico: 'ban', label: 'Nomes proibidos' },
   ].filter(Boolean);
 }
 
@@ -87,6 +99,7 @@ export function renderSidebar(app) {
 
   const links = adminLinks(app);
   const al = allowlistLinks(app);
+  const lore = loreLinks(app);
   const navLink = ({ href, ico, label, count }) =>
     h('a', { class: 'cat-item', href, 'data-nav': '', 'aria-current': String(app.router.route.hash === href) },
       h('span', { class: 'cat-label' }, icon(ico), ' ', label),
@@ -109,6 +122,9 @@ export function renderSidebar(app) {
     al.length > 0 && h('nav', { class: 'sidebar-tools', id: 'sidebar-allowlist', 'aria-labelledby': 'sidebar-al-title' },
       h('h2', { class: 'sidebar-title', id: 'sidebar-al-title' }, 'Allowlist'),
       al.map(navLink)),
+    lore.length > 0 && h('nav', { class: 'sidebar-tools', id: 'sidebar-lore', 'aria-labelledby': 'sidebar-lore-title' },
+      h('h2', { class: 'sidebar-title', id: 'sidebar-lore-title' }, 'Lore'),
+      lore.map(navLink)),
     links.length > 0 && h('nav', { class: 'sidebar-tools', 'aria-labelledby': 'sidebar-admin-title' },
       h('h2', { class: 'sidebar-title', id: 'sidebar-admin-title' }, 'Administração'),
       links.map(navLink)),

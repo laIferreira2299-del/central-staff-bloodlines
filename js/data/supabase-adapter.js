@@ -13,6 +13,11 @@ import {
 } from '../core/allowlist.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
 import {
+  BLOCKED_NAME_FIELDS, CHECKLIST_FIELDS, LORE_ERRORS, QUESTION_FIELDS, photoError, pickCharacter, pickFields,
+  validateBlockedName, validateCharacter, validateCharacterNote, validateChecklistItem, validateQuestion,
+} from '../core/lore.js';
+import { PRODUCTIVITY_ERRORS } from '../core/productivity.js';
+import {
   PROPOSAL_ERRORS, PROPOSAL_NOTE_MAX, proposalStatus, validateAnnouncement, validateEvaluation,
 } from '../core/workflow.js';
 import {
@@ -26,6 +31,8 @@ const EVALUATION_COLUMNS = 'id, period_id, evaluated_id, evaluator_id, status, c
 const WEBHOOK_SELECT = WEBHOOK_COLUMNS.join(', ');
 const ATTACHMENT_COLUMNS = 'id, evaluation_id, storage_path, file_name, mime, size, position, created_at';
 const PRINTS_BUCKET = 'al-prints';
+const PHOTOS_BUCKET = 'character-photos';
+const CHARACTER_COLUMNS = 'id, character_name, discord_name, discord_id, city_id, photo_path, status, version, created_by, created_at, updated_by, updated_at';
 const FUNCTION_NAME = 'enviar-discord';
 
 /**
@@ -150,6 +157,53 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     if (Array.isArray(data)) names = new Map(data.map((r) => [r.discord_id, r.display_name]));
   }
   const nameOf = (id) => (id ? names.get(id) ?? null : null);
+  /* ---------- Etapas 8 e 9 ---------- */
+  /** Erro KB422 com mensagem conhecida → erro no campo certo (o resto segue o mapError). */
+  function fieldFail(error, status, byMessage) {
+    const field = error?.code === 'KB422' ? byMessage[error.message] : null;
+    return field ? validation({ [field]: error.message }) : failFrom(error, status);
+  }
+
+  /** Gabarito e checklist: cria (sem id) ou edita; autoria pelo banco. */
+  async function saveConfigRow(table, input, fields, validate, defaults) {
+    const { error: g } = await guard('lore.gerenciar');
+    if (g) return g;
+    let current = null;
+    if (input.id) {
+      const { data, error, status } = await sb.from(table).select('*').eq('id', input.id).maybeSingle();
+      if (error) return failFrom(error, status);
+      if (!data) return fail('NOT_FOUND', 'Registro não encontrado.');
+      current = data;
+    }
+    const next = { ...defaults, ...(current ?? {}), ...pickFields(input, fields) };
+    if (!Number.isInteger(next.position)) {
+      if (current) next.position = current.position;
+      else {
+        const { data } = await sb.from(table).select('position').order('position', { ascending: false }).limit(1);
+        next.position = (data?.[0]?.position ?? 0) + 1;
+      }
+    }
+    const { valid, errors } = validate(next);
+    if (!valid) return validation(errors);
+    const row = Object.fromEntries(fields.map((f) => [f, next[f]]));
+    const q = current ? sb.from(table).update(row).eq('id', current.id) : sb.from(table).insert(row);
+    const { data, error, status } = await q.select('*').maybeSingle();
+    if (error) return failFrom(error, status);
+    return data ? ok(data) : fail('NOT_FOUND', 'Registro não encontrado.');
+  }
+
+  /** Links temporários (1 hora) das fotos dos personagens. */
+  async function photoUrls(rows) {
+    const paths = rows.map((c) => c.photo_path).filter(Boolean);
+    if (!paths.length) return new Map();
+    const signed = await sb.storage.from(PHOTOS_BUCKET).createSignedUrls(paths, 3600);
+    return new Map((signed.data ?? []).filter((x) => x.signedUrl).map((x) => [x.path, x.signedUrl]));
+  }
+  const presentCharacter = (c, urls) => ({
+    ...c, photo_url: c.photo_path ? urls.get(c.photo_path) ?? null : null,
+    created_by_name: nameOf(c.created_by), updated_by_name: nameOf(c.updated_by),
+  });
+
   const present = (p) => ({
     ...p,
     tags: p.tags ?? [],
@@ -923,6 +977,160 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       const { data, error, status } = await sb.from('discord_webhooks').delete().eq('id', id).select('id');
       if (error) return failFrom(error, status);
       return data?.length ? ok(null) : fail('NOT_FOUND', 'Webhook não encontrado.');
+    },
+
+    /* ----- Etapa 8: gabarito, checklist e nomes proibidos (lore.gerenciar) ----- */
+    async saveInterviewQuestion(input = {}) {
+      return saveConfigRow('interview_questions', input, QUESTION_FIELDS, validateQuestion, { answer: '', extra_note: '', active: true });
+    },
+
+    async saveChecklistItem(input = {}) {
+      return saveConfigRow('al_checklist_items', input, CHECKLIST_FIELDS, validateChecklistItem, { hint: '', active: true });
+    },
+
+    async saveBlockedName(input = {}) {
+      const { error: g } = await guard('lore.gerenciar');
+      if (g) return g;
+      let current = null;
+      if (input.id) {
+        const { data, error, status } = await sb.from('blocked_names').select('*').eq('id', input.id).maybeSingle();
+        if (error) return failFrom(error, status);
+        if (!data) return fail('NOT_FOUND', 'Nome não encontrado.');
+        current = data;
+      }
+      if (current?.reason === 'em_uso' || (!current && input.reason === 'em_uso')) return validation({ _: ALLOWLIST_ERRORS.nameInUse });
+      const patch = pickFields(input, BLOCKED_NAME_FIELDS);
+      const next = { series: '', reason_text: '', mode: 'bloqueia', active: true, ...(current ?? {}), ...patch };
+      const { valid, errors } = validateBlockedName(next);
+      if (!valid) return validation(errors);
+      const row = Object.fromEntries(BLOCKED_NAME_FIELDS.map((f) => [f, next[f]]));
+      const q = current ? sb.from('blocked_names').update(row).eq('id', current.id) : sb.from('blocked_names').insert(row);
+      const { data, error, status } = await q.select('*').maybeSingle();
+      if (error) return fieldFail(error, status, { [ALLOWLIST_ERRORS.nameDuplicate]: 'name' });
+      return data ? ok(data) : fail('NOT_FOUND', 'Nome não encontrado.');
+    },
+
+    /* ----- Etapa 9: personagens em uso (12_lore.sql) ----- */
+    async listCharacters() {
+      const { can, error: g } = await guard();
+      if (g) return g;
+      if (!can('lore.consultar') && !can('lore.gerenciar')) return fail('FORBIDDEN');
+      const { data, error, status } = await sb.from('lore_characters').select(CHARACTER_COLUMNS).order('character_name');
+      if (error) return failFrom(error, status);
+      await loadNames();
+      const urls = await photoUrls(data);
+      return ok(data.map((c) => presentCharacter(c, urls)).sort((a, b) => a.character_name.localeCompare(b.character_name, 'pt-BR')));
+    },
+
+    async getCharacter(id) {
+      const { can, error: g } = await guard();
+      if (g) return g;
+      if (!can('lore.consultar') && !can('lore.gerenciar')) return fail('FORBIDDEN');
+      const { data, error, status } = await sb.from('lore_characters').select(CHARACTER_COLUMNS).eq('id', id).maybeSingle();
+      if (error) return failFrom(error, status);
+      if (!data) return fail('NOT_FOUND', 'Personagem não encontrado.');
+      const [revs, notes] = await Promise.all([
+        sb.from('lore_character_revisions').select('*').eq('character_id', id).order('version', { ascending: false }),
+        can('lore.anotacoes') ? sb.rpc('character_notes', { p_character: id }) : Promise.resolve({ data: [] }),
+        loadNames(),
+      ]);
+      if (revs.error) return failFrom(revs.error, revs.status);
+      if (notes.error) return failFrom(notes.error, notes.status);
+      const urls = await photoUrls([data]);
+      return ok({
+        ...presentCharacter(data, urls),
+        revisions: revs.data.map((r) => ({ ...r, changed_by_name: nameOf(r.changed_by) })),
+        notes: (notes.data ?? []).map((n) => ({ ...n, created_by_name: nameOf(n.created_by) })),
+      });
+    },
+
+    async saveCharacter(input = {}) {
+      const { error: g } = await guard('lore.gerenciar');
+      if (g) return g;
+      let current = null;
+      if (input.id) {
+        const { data, error, status } = await sb.from('lore_characters').select(CHARACTER_COLUMNS).eq('id', input.id).maybeSingle();
+        if (error) return failFrom(error, status);
+        if (!data) return fail('NOT_FOUND', 'Personagem não encontrado.');
+        current = data;
+      }
+      const next = { status: 'ativo', ...(current ? pickCharacter(current) : {}), ...pickCharacter(input) };
+      const { valid, errors } = validateCharacter(next);
+      if (!valid) return validation(errors);
+      const q = current ? sb.from('lore_characters').update(next).eq('id', current.id) : sb.from('lore_characters').insert(next);
+      const { data, error, status } = await q.select(CHARACTER_COLUMNS).maybeSingle();
+      if (error) return fieldFail(error, status, { [LORE_ERRORS.duplicateCharacter]: 'character_name', [LORE_ERRORS.duplicateCityId]: 'city_id' });
+      if (!data) return fail('NOT_FOUND', 'Personagem não encontrado.');
+      await loadNames();
+      return ok(presentCharacter(data, await photoUrls([data])));
+    },
+
+    async setCharacterPhoto(id, file) {
+      const { error: g } = await guard('lore.gerenciar');
+      if (g) return g;
+      const { data: c, error: e, status: s } = await sb.from('lore_characters').select(CHARACTER_COLUMNS).eq('id', id).maybeSingle();
+      if (e) return failFrom(e, s);
+      if (!c) return fail('NOT_FOUND', 'Personagem não encontrado.');
+      let path = null;
+      if (file) {
+        const bad = photoError(file);
+        if (bad) return validation({ file: bad });
+        path = `${id}/${globalThis.crypto.randomUUID()}.${file.type.split('/')[1].replace('jpeg', 'jpg')}`;
+        const up = await sb.storage.from(PHOTOS_BUCKET).upload(path, file, { contentType: file.type, upsert: false });
+        if (up.error) return failFrom(up.error, up.error.statusCode ?? up.error.status);
+      }
+      const { data, error, status } = await sb.from('lore_characters').update({ photo_path: path }).eq('id', id).select(CHARACTER_COLUMNS).maybeSingle();
+      if (error || !data) {
+        if (path) await sb.storage.from(PHOTOS_BUCKET).remove([path]);
+        return error ? failFrom(error, status) : fail('NOT_FOUND', 'Personagem não encontrado.');
+      }
+      if (c.photo_path) await sb.storage.from(PHOTOS_BUCKET).remove([c.photo_path]);
+      await loadNames();
+      return ok(presentCharacter(data, await photoUrls([data])));
+    },
+
+    async addCharacterNote(characterId, input = {}) {
+      const { error: g } = await guard('lore.anotacoes');
+      if (g) return g;
+      const next = { about: String(input.about ?? ''), body: String(input.body ?? '').trim() };
+      const { valid, errors } = validateCharacterNote(next);
+      if (!valid) return validation(errors);
+      const { data, error, status } = await sb.from('character_admin_notes').insert({ character_id: characterId, ...next }).select('*').maybeSingle();
+      if (error) return error.code === '23503' ? fail('NOT_FOUND', 'Personagem não encontrado.') : failFrom(error, status);
+      await loadNames();
+      return ok({ ...data, created_by_name: nameOf(data.created_by) });
+    },
+
+    async deleteCharacterNote(id) {
+      const { error: g } = await guard('lore.anotacoes');
+      if (g) return g;
+      const { data, error, status } = await sb.from('character_admin_notes').delete().eq('id', id).select('id');
+      if (error) return failFrom(error, status);
+      return data?.length ? ok(null) : fail('NOT_FOUND', 'Anotação não encontrada.');
+    },
+
+    /* ----- Etapa 10: produtividade (13_produtividade.sql) ----- */
+    async getProductivity({ from, to } = {}) {
+      const { error: g } = await guard('produtividade.ver');
+      if (g) return g;
+      if (!from || !to || !(Date.parse(to) > Date.parse(from))) return validation({ _: PRODUCTIVITY_ERRORS.period });
+      const { data, error, status } = await sb.rpc('staff_productivity', { p_from: new Date(from).toISOString(), p_to: new Date(to).toISOString() });
+      if (error) return failFrom(error, status);
+      const iso = (m) => ({ ...m, last_at: m.last_at ? new Date(m.last_at).toISOString() : null });
+      const byName = (a, b) => (a.display_name ?? a.discord_id).localeCompare(b.display_name ?? b.discord_id, 'pt-BR');
+      return ok({
+        totals: data.totals, daily: data.daily,
+        members: data.members.map(iso).sort(byName), inactive: data.inactive.map(iso).sort(byName),
+      });
+    },
+
+    async listStaffNames() {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { data, error, status } = await sb.rpc('staff_names');
+      if (error) return failFrom(error, status);
+      return ok(data.map((r) => ({ discord_id: r.discord_id, display_name: r.display_name }))
+        .sort((a, b) => a.display_name.localeCompare(b.display_name, 'pt-BR')));
     },
 
     /* ----- Etapa 7: envio ao Discord pela Edge Function (a url do webhook nunca vem ao site) ----- */

@@ -7,6 +7,7 @@ import { h, icon } from '../dom.js';
 import { formatDate, roleBadge, statusBadge, teamBadge } from '../components.js';
 import { CEO, PERMISSIONS, permissionsOf, roleLevel } from '../../core/permissions.js';
 import { recommendationLabel, stars } from '../../core/workflow.js';
+import { interviewTotal, percent, periodRange } from '../../core/productivity.js';
 import { describeAudit } from './audit.js';
 import { renderMessage } from './message.js';
 
@@ -43,6 +44,7 @@ export function renderMember(app, discordId) {
 
     const evaluationsHost = h('div', {});
     const historyHost = h('div', {});
+    const productivityHost = h('div', {});
     const row = (label, ...value) => h('div', { class: 'member-row' }, h('dt', {}, label), h('dd', {}, ...value));
     body.replaceChildren(
       h('section', { class: 'panel', 'aria-labelledby': 'member-data-title' },
@@ -70,18 +72,29 @@ export function renderMember(app, discordId) {
               p.description);
           }))),
 
+      productivityHost,
       evaluationsHost,
-      historyHost,
-      h('section', { class: 'panel', 'aria-labelledby': 'member-next-title' },
-        h('h2', { class: 'block-title', id: 'member-next-title' }, icon('clock'), 'Em breve nesta ficha'),
-        h('p', { class: 'panel-text' },
-          'Produtividade (análises de allowlist e entrevistas) aparece aqui quando o módulo de Allowlist entrar no ar.')));
+      historyHost);
 
     const nameOf = (id) => staff.data.find((s) => s.discord_id === id)?.display_name ?? id;
-    const [evals, audit] = await Promise.all([
+    const range = periodRange('30d');
+    const [evals, audit, prod] = await Promise.all([
       !self && app.feature('avaliacoes') && app.can('avaliacoes.ler') ? app.adapter.listEvaluations() : null,
       app.feature('auditoria') && app.can('auditoria.ver') ? app.adapter.listAudit({ entity: 'membro', entityId: m.discord_id, limit: 50 }) : null,
+      app.feature('produtividade') && app.can('produtividade.ver') ? app.adapter.getProductivity({ from: range.from, to: range.to }) : null,
     ]);
+    if (prod && !prod.error && alive) {
+      const p = prod.data.members.find((x) => x.discord_id === m.discord_id);
+      const item = (label, value) => h('div', { class: 'member-row' }, h('dt', {}, label), h('dd', {}, value));
+      productivityHost.replaceChildren(h('section', { class: 'panel', 'aria-labelledby': 'member-prod-title' },
+        h('h2', { class: 'block-title', id: 'member-prod-title' }, icon('chart-bar'), 'Produtividade (últimos 30 dias)'),
+        p ? h('dl', { class: 'member-data', id: 'member-prod' },
+          item('Allowlists analisadas', `${p.allowlists} (${percent(p.allowlists_aprovadas, p.allowlists)}% aprovadas)`),
+          item('Entrevistas', `${interviewTotal(p)} (entrevistou ${p.entrevistas}, acompanhou ${p.acompanhamentos})`),
+          item('Última atividade', formatDate(p.last_at, { time: true })))
+          : h('p', { class: 'panel-text' }, 'Nenhuma allowlist ou entrevista registrada nos últimos 30 dias.'),
+        h('p', { class: 'panel-text' }, h('a', { href: '#/controle' }, 'Abrir o painel de produtividade'))));
+    }
     if (!alive) return;
     if (evals && !evals.error) {
       const mine = evals.data.filter((e) => e.evaluated_id === m.discord_id && e.status !== 'rascunho')

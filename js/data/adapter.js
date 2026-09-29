@@ -257,6 +257,28 @@
  *           finalidade do tipo (senão VALIDATION webhook). Já enviada sem resend = VALIDATION alreadySent.
  *           O Discord recusou = VALIDATION com DISCORD_SEND_ERRORS.discord(status). Mensagens em errors._.
  * @property {(webhookId: string) => Result<null>} testDiscordWebhook   webhooks.gerenciar. Posta TEST_MESSAGE.
+ *
+ * Etapa 8 · gabarito, checklist e nomes proibidos (lore.gerenciar; regras em js/core/lore.js)
+ * @property {(q: object) => Result<InterviewQuestion>} saveInterviewQuestion   Cria (sem id) ou edita. VALIDATION por campo.
+ * @property {(c: object) => Result<ChecklistItem>} saveChecklistItem
+ * @property {(n: object) => Result<BlockedName>} saveBlockedName
+ *           "Em uso na cidade" não se cadastra nem se edita aqui (VALIDATION em errors._ = ALLOWLIST_ERRORS.nameInUse).
+ *           Repetido entre os ativos = VALIDATION em errors.name (ALLOWLIST_ERRORS.nameDuplicate).
+ *
+ * Etapa 9 · personagens em uso (12_lore.sql). Ler: lore.consultar ou lore.gerenciar. Escrever: lore.gerenciar.
+ * @property {() => Result<Character[]>} listCharacters       Por nome, com photo_url (link temporário de 1 hora ou null).
+ * @property {(id: string) => Result<CharacterDetail>} getCharacter
+ *           + revisions (mais nova primeiro) e notes (só com lore.anotacoes; senão []). As notas sobre o
+ *           Player aparecem em todos os personagens do mesmo Discord ID.
+ * @property {(c: object) => Result<Character>} saveCharacter    Cria ou edita. Nome ou ID da Cidade repetidos entre os
+ *           não liberados = VALIDATION em errors.character_name / errors.city_id (LORE_ERRORS).
+ * @property {(id: string, file: Blob|null) => Result<Character>} setCharacterPhoto   null = tira a foto. VALIDATION em errors.file.
+ * @property {(characterId: string, n: { about: string, body: string }) => Result<CharacterNote>} addCharacterNote   lore.anotacoes.
+ * @property {(id: string) => Result<null>} deleteCharacterNote   lore.anotacoes e só a própria (senão NOT_FOUND).
+ *
+ * Etapa 10 · produtividade (13_produtividade.sql; conta em js/core/productivity.js)
+ * @property {(p: { from: string, to: string }) => Result<Productivity>} getProductivity   produtividade.ver. to exclusivo.
+ * @property {() => Result<Array<{ discord_id: string, display_name: string }>>} listStaffNames   Staff: nomes de toda a equipe.
  */
 
 export const ERROR_CODES = Object.freeze({
@@ -285,6 +307,9 @@ export const ADAPTER_METHODS = Object.freeze([
   'listAlEvaluations', 'getAlEvaluation', 'saveAlEvaluation', 'addAlPrint', 'removeAlPrint', 'getAlPrintUrls',
   'listDiscordWebhooks', 'saveDiscordWebhook', 'deleteDiscordWebhook',
   'sendAlToDiscord', 'testDiscordWebhook',
+  'saveInterviewQuestion', 'saveChecklistItem', 'saveBlockedName',
+  'listCharacters', 'getCharacter', 'saveCharacter', 'setCharacterPhoto', 'addCharacterNote', 'deleteCharacterNote',
+  'getProductivity', 'listStaffNames',
 ]);
 
 /** Campos da análise que o cliente pode definir (o resto é do servidor). */
@@ -349,7 +374,7 @@ export const WEBHOOK_COLUMNS = Object.freeze([
 ]);
 
 /** Módulos que o banco pode ter (Staff.features). */
-export const FEATURES = Object.freeze(['allowlist', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos']);
+export const FEATURES = Object.freeze(['allowlist', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos', 'lore', 'produtividade']);
 
 /** Campos que o cliente pode definir. Todo o resto é do servidor. */
 export const EDITABLE_FIELDS = Object.freeze([

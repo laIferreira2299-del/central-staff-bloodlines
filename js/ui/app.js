@@ -25,6 +25,10 @@ import { renderMessage } from './views/message.js';
 import { renderAlForm } from './views/allowlist.js';
 import { renderAlDetail, renderAlHistory } from './views/al-history.js';
 import { renderWebhooks } from './views/webhooks.js';
+import { renderGabarito } from './views/gabarito.js';
+import { renderLoreNames } from './views/lore-names.js';
+import { renderCharacter, renderCharacters } from './views/characters.js';
+import { renderProductivity } from './views/productivity.js';
 
 const SEARCH_DEBOUNCE_MS = 150;
 const EMPTY_FILTERS = Object.freeze({ category: '', audience: '', status: '', favoritesOnly: false });
@@ -171,7 +175,7 @@ export function createApp(adapter, { isMock = false } = {}) {
     /** Re-renderiza a rota atual mantendo rolagem e foco (após mudança de dados). */
     render() {
       const route = router.route;
-      if (!state.ready || ['new', 'edit', 'permissions', 'evaluation', 'evaluations', 'announcements', 'proposal', 'alForm', 'interview', 'alHistory', 'alDetail', 'webhooks'].includes(route.name)) return;
+      if (!state.ready || ['new', 'edit', 'permissions', 'evaluation', 'evaluations', 'announcements', 'proposal', 'alForm', 'interview', 'alHistory', 'alDetail', 'webhooks', 'gabarito', 'loreNames', 'characters', 'character', 'productivity'].includes(route.name)) return;
       const key = document.activeElement?.dataset?.focusKey;
       const y = window.scrollY;
       showRoute(route, { navigated: false });
@@ -303,6 +307,11 @@ export function createApp(adapter, { isMock = false } = {}) {
       alHistory: () => renderAlHistory(app),
       alDetail: () => renderAlDetail(app, route.slug),
       webhooks: () => renderWebhooks(app),
+      gabarito: () => renderGabarito(app),
+      loreNames: () => renderLoreNames(app),
+      characters: () => renderCharacters(app),
+      character: () => renderCharacter(app, route.slug),
+      productivity: () => renderProductivity(app),
       notfound: () => renderMessage(app, { title: 'Página não encontrada', text: 'Volte para a lista de procedimentos.' }),
     };
     const mount = () => {

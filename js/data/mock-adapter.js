@@ -13,6 +13,11 @@ import {
 } from '../core/allowlist.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
 import {
+  BLOCKED_NAME_FIELDS, CHECKLIST_FIELDS, LORE_ERRORS, QUESTION_FIELDS, photoError, pickCharacter, pickFields,
+  validateBlockedName, validateCharacter, validateCharacterNote, validateChecklistItem, validateQuestion,
+} from '../core/lore.js';
+import { PRODUCTIVITY_ERRORS, aggregateProductivity } from '../core/productivity.js';
+import {
   PROPOSAL_ERRORS, contentChanged, proposalStatus, EVALUATION_ERRORS, evaluationChangeError, validateEvaluation,
   isPeriodOpen, validateAnnouncement, isAnnouncementFor, PROPOSAL_NOTE_MAX,
 } from '../core/workflow.js';
@@ -79,8 +84,12 @@ function allowlistState(seed, nowIso) {
       character_id: null, reason_text: '', mode: n.mode ?? 'bloqueia', ...meta,
     })),
     alEvaluations: [], alParticipants: [], alAnswers: [], alAttachments: [], webhooks: [],
+    ...loreState(),
   };
 }
+
+/** Etapa 9: personagens, histórico e anotações (vazios no começo, como o 12_lore.sql). */
+const loreState = () => ({ characters: [], characterRevisions: [], characterNotes: [] });
 
 /**
  * @param {{
@@ -100,6 +109,8 @@ export function createMockAdapter({
   const fresh = () => ({ ...initialState(seed, adminId, nowIso()), ...allowlistState(allowlistSeed, nowIso()) });
   /** Arquivos dos prints: só em memória (o armazenamento guarda só os dados). */
   const printFiles = new Map();
+  /** Fotos dos personagens (Etapa 9): só em memória. */
+  const photoFiles = new Map();
 
   let state = load() ?? fresh();
   let sessionKey = loadSession() ?? user;
@@ -116,6 +127,7 @@ export function createMockAdapter({
       if (parsed?.v !== STATE_VERSION) return null;
       // Estado salvo antes da Etapa 5: ganha os dados da Allowlist sem perder o resto.
       if (!parsed.questions) Object.assign(parsed, allowlistState(allowlistSeed, nowIso()));
+      if (!parsed.characters) Object.assign(parsed, loreState());
       return parsed;
     } catch { return null; }
   }
@@ -256,6 +268,49 @@ export function createMockAdapter({
     grid: clone(state.grid),
   });
   const otherActiveCeos = (discordId) => state.staff.filter((s) => s.role === CEO && s.active && s.discord_id !== discordId).length;
+
+  /* ---------- Etapas 8 e 9 (simulam o 12_lore.sql) ---------- */
+  const seesLore = (can) => can('lore.consultar') || can('lore.gerenciar');
+  function presentCharacter(c) {
+    const file = c.photo_path ? photoFiles.get(c.photo_path) : null;
+    const photo_url = c.photo_path
+      ? (file && globalThis.URL?.createObjectURL ? URL.createObjectURL(file) : `mock://character-photos/${c.photo_path}`)
+      : null;
+    return { ...clone(c), photo_url, created_by_name: nameOf(c.created_by), updated_by_name: nameOf(c.updated_by) };
+  }
+  const presentNote = (n) => ({ ...clone(n), created_by_name: nameOf(n.created_by) });
+
+  /** Cria ou edita gabarito/checklist com autoria do "servidor". */
+  function saveConfig(staff, list, input, fields, validate, defaults, onSaved) {
+    const row = input.id ? list.find((x) => x.id === input.id) : null;
+    if (input.id && !row) return fail('NOT_FOUND', 'Registro não encontrado.');
+    const next = { ...defaults, ...(row ?? {}), ...pickFields(input, fields) };
+    if (!Number.isInteger(next.position)) next.position = row?.position ?? Math.max(0, ...list.map((x) => x.position)) + 1;
+    const { valid, errors } = validate(next);
+    if (!valid) return validationError(errors);
+    const before = row ? clone(row) : null;
+    const at = nowIso();
+    const target = row ?? { id: uuid(), created_by: staff.discord_id, created_at: at };
+    Object.assign(target, Object.fromEntries(fields.map((f) => [f, next[f]])), { updated_by: staff.discord_id, updated_at: at });
+    if (!row) list.push(target);
+    onSaved?.(target, before);
+    save();
+    return ok(presentConfig(target));
+  }
+
+  /** Nome do personagem em Nomes proibidos (Em uso na cidade); Liberado desativa. */
+  function syncCharacterName(c, staff) {
+    const at = nowIso();
+    const current = state.blockedNames.find((n) => n.character_id === c.id);
+    if (c.status === 'liberado') {
+      if (current) Object.assign(current, { active: false, updated_by: staff.discord_id, updated_at: at });
+      return;
+    }
+    const data = { name: c.character_name, name_norm: normalizeName(c.character_name), kind: 'nome', reason: 'em_uso', series: '',
+      reason_text: '', mode: 'bloqueia', active: true, updated_by: staff.discord_id, updated_at: at };
+    if (current) Object.assign(current, data);
+    else state.blockedNames.push({ id: uuid(), character_id: c.id, created_by: staff.discord_id, created_at: at, ...data });
+  }
 
   const adapter = {
     /* ----- sessão ----- */
@@ -1050,6 +1105,166 @@ export function createMockAdapter({
       });
     },
 
+    /* ----- Etapa 8: gabarito, checklist e nomes proibidos (lore.gerenciar) ----- */
+    async saveInterviewQuestion(input = {}) {
+      return run('saveInterviewQuestion', 'lore.gerenciar', async ({ staff }) => saveConfig(staff, state.questions, input,
+        QUESTION_FIELDS, validateQuestion, { extra_note: '', answer: '', active: true }, (row, before) => {
+          if (!before || before.question !== row.question || before.active !== row.active) {
+            audit(staff, 'pergunta', row.id, !before ? 'cadastrada' : before.active !== row.active ? (row.active ? 'ativada' : 'desativada') : 'alterada',
+              before && { question: before.question, active: before.active }, { question: row.question, active: row.active });
+          }
+        }));
+    },
+
+    async saveChecklistItem(input = {}) {
+      return run('saveChecklistItem', 'lore.gerenciar', async ({ staff }) => saveConfig(staff, state.checklistItems, input,
+        CHECKLIST_FIELDS, validateChecklistItem, { hint: '', active: true }));
+    },
+
+    async saveBlockedName(input = {}) {
+      return run('saveBlockedName', 'lore.gerenciar', async ({ staff }) => {
+        const row = input.id ? state.blockedNames.find((n) => n.id === input.id) : null;
+        if (input.id && !row) return fail('NOT_FOUND', 'Nome não encontrado.');
+        if (row?.reason === 'em_uso' || (!row && input.reason === 'em_uso')) return validationError({ _: ALLOWLIST_ERRORS.nameInUse });
+        const next = { series: '', reason_text: '', mode: 'bloqueia', active: true, ...(row ?? {}), ...pickFields(input, BLOCKED_NAME_FIELDS) };
+        const { valid, errors } = validateBlockedName(next);
+        if (!valid) return validationError(errors);
+        const norm = normalizeName(next.name);
+        if (next.active && state.blockedNames.some((n) => n.active && n.id !== row?.id && n.kind === next.kind && n.name_norm === norm
+          && n.reason === next.reason && n.series === next.series)) return validationError({ name: ALLOWLIST_ERRORS.nameDuplicate });
+        const cols = ['name', 'kind', 'reason', 'series', 'reason_text', 'mode', 'active'];
+        const snap = (n) => Object.fromEntries(cols.map((c) => [c, n[c]]));
+        const before = row ? snap(row) : null;
+        const at = nowIso();
+        const target = row ?? { id: uuid(), character_id: null, created_by: staff.discord_id, created_at: at };
+        Object.assign(target, snap(next), { name_norm: norm, updated_by: staff.discord_id, updated_at: at });
+        if (!row) state.blockedNames.push(target);
+        if (!row || JSON.stringify(before) !== JSON.stringify(snap(target))) {
+          audit(staff, 'nome_proibido', target.id, !row ? 'cadastrado' : before.active !== target.active ? (target.active ? 'ativado' : 'desativado') : 'alterado', before, snap(target));
+        }
+        save();
+        return ok(presentConfig(target));
+      });
+    },
+
+    /* ----- Etapa 9: personagens em uso ----- */
+    async listCharacters() {
+      return run('listCharacters', 'staff', async ({ can }) => {
+        if (!seesLore(can)) return fail('FORBIDDEN');
+        return ok(state.characters.map(presentCharacter).sort((a, b) => a.character_name.localeCompare(b.character_name, 'pt-BR')));
+      });
+    },
+
+    async getCharacter(id) {
+      return run('getCharacter', 'staff', async ({ can }) => {
+        if (!seesLore(can)) return fail('FORBIDDEN');
+        const c = state.characters.find((x) => x.id === id);
+        if (!c) return fail('NOT_FOUND', 'Personagem não encontrado.');
+        const notes = can('lore.anotacoes')
+          ? state.characterNotes.filter((n) => n.character_id === c.id || (n.about === 'player' && n.player_discord_id === c.discord_id))
+            .sort((a, b) => b.created_at.localeCompare(a.created_at)).map(presentNote)
+          : [];
+        const revisions = state.characterRevisions.filter((r) => r.character_id === c.id).sort((a, b) => b.version - a.version)
+          .map((r) => ({ ...clone(r), changed_by_name: nameOf(r.changed_by) }));
+        return ok({ ...presentCharacter(c), revisions, notes });
+      });
+    },
+
+    async saveCharacter(input = {}) {
+      return run('saveCharacter', 'lore.gerenciar', async ({ staff }) => {
+        const row = input.id ? state.characters.find((c) => c.id === input.id) : null;
+        if (input.id && !row) return fail('NOT_FOUND', 'Personagem não encontrado.');
+        const next = { status: 'ativo', ...(row ? pickCharacter(row) : {}), ...pickCharacter(input) };
+        const { valid, errors } = validateCharacter(next);
+        if (!valid) return validationError(errors);
+        const norm = normalizeName(next.character_name);
+        const others = state.characters.filter((c) => c.id !== row?.id && c.status !== 'liberado');
+        if (next.status !== 'liberado') {
+          if (others.some((c) => normalizeName(c.character_name) === norm)) return validationError({ character_name: LORE_ERRORS.duplicateCharacter });
+          if (others.some((c) => c.city_id === next.city_id)) return validationError({ city_id: LORE_ERRORS.duplicateCityId });
+        }
+        const at = nowIso();
+        if (row) {
+          const changed = Object.keys(next).some((k) => next[k] !== row[k]);
+          if (!changed) return ok(presentCharacter(row));
+          const { photo_url, ...old } = clone(row);
+          state.characterRevisions.push({ id: uuid(), character_id: row.id, version: row.version, data: old, changed_by: staff.discord_id, changed_at: at });
+          audit(staff, 'personagem', row.id, row.status !== next.status ? `situação: ${next.status}` : 'alterado',
+            { character_name: row.character_name, discord_id: row.discord_id, city_id: row.city_id, status: row.status },
+            { character_name: next.character_name, discord_id: next.discord_id, city_id: next.city_id, status: next.status });
+          Object.assign(row, next, { version: row.version + 1, updated_by: staff.discord_id, updated_at: at });
+        } else {
+          const c = { id: uuid(), ...next, photo_path: null, version: 1, created_by: staff.discord_id, created_at: at, updated_by: staff.discord_id, updated_at: at };
+          state.characters.push(c);
+          audit(staff, 'personagem', c.id, 'cadastrado', null,
+            { character_name: c.character_name, discord_id: c.discord_id, city_id: c.city_id, status: c.status });
+        }
+        const target = row ?? state.characters.at(-1);
+        syncCharacterName(target, staff);
+        save();
+        return ok(presentCharacter(target));
+      });
+    },
+
+    async setCharacterPhoto(id, file) {
+      return run('setCharacterPhoto', 'lore.gerenciar', async ({ staff }) => {
+        const c = state.characters.find((x) => x.id === id);
+        if (!c) return fail('NOT_FOUND', 'Personagem não encontrado.');
+        if (file) {
+          const bad = photoError(file);
+          if (bad) return validationError({ file: bad });
+        }
+        if (c.photo_path) photoFiles.delete(c.photo_path);
+        const path = file ? `${id}/${uuid()}.${file.type.split('/')[1].replace('jpeg', 'jpg')}` : null;
+        if (path) photoFiles.set(path, file);
+        Object.assign(c, { photo_path: path, version: c.version + 1, updated_by: staff.discord_id, updated_at: nowIso() });
+        save();
+        return ok(presentCharacter(c));
+      });
+    },
+
+    async addCharacterNote(characterId, input = {}) {
+      return run('addCharacterNote', 'lore.anotacoes', async ({ staff }) => {
+        const c = state.characters.find((x) => x.id === characterId);
+        if (!c) return fail('NOT_FOUND', 'Personagem não encontrado.');
+        const next = { about: String(input.about ?? ''), body: String(input.body ?? '').trim() };
+        const { valid, errors } = validateCharacterNote(next);
+        if (!valid) return validationError(errors);
+        const n = { id: uuid(), character_id: c.id, ...next, player_discord_id: c.discord_id, created_by: staff.discord_id, created_at: nowIso() };
+        state.characterNotes.push(n);
+        save();
+        return ok(presentNote(n));
+      });
+    },
+
+    async deleteCharacterNote(id) {
+      return run('deleteCharacterNote', 'lore.anotacoes', async ({ staff }) => {
+        const n = state.characterNotes.find((x) => x.id === id && x.created_by === staff.discord_id);
+        if (!n) return fail('NOT_FOUND', 'Anotação não encontrada.');
+        state.characterNotes = state.characterNotes.filter((x) => x !== n);
+        save();
+        return ok(null);
+      });
+    },
+
+    /* ----- Etapa 10: produtividade ----- */
+    async getProductivity({ from, to } = {}) {
+      return run('getProductivity', 'produtividade.ver', async () => {
+        if (!from || !to || !(Date.parse(to) > Date.parse(from)) || Date.parse(to) - Date.parse(from) > 400 * 864e5) {
+          return validationError({ _: PRODUCTIVITY_ERRORS.period });
+        }
+        return ok(aggregateProductivity({
+          evaluations: state.alEvaluations, participants: state.alParticipants, staff: state.staff,
+          from: new Date(from).toISOString(), to: new Date(to).toISOString(),
+        }));
+      });
+    },
+
+    async listStaffNames() {
+      return run('listStaffNames', 'staff', async () => ok(state.staff.map((s) => ({ discord_id: s.discord_id, display_name: s.display_name }))
+        .sort((a, b) => a.display_name.localeCompare(b.display_name, 'pt-BR'))));
+    },
+
     /* ----- Etapa 7: envio ao Discord (simulado; o de verdade é a Edge Function) ----- */
     async sendAlToDiscord(evaluationId, { webhookId, resend = false } = {}) {
       return run('sendAlToDiscord', 'allowlist.avaliar', async ({ staff, can }) => {
@@ -1138,6 +1353,7 @@ export function createMockAdapter({
     reset(newSeed = seed) {
       state = { ...initialState(newSeed, adminId, nowIso()), ...allowlistState(allowlistSeed, nowIso()) };
       printFiles.clear();
+      photoFiles.clear();
       pendingFailures.clear();
       offline = false;
       save();

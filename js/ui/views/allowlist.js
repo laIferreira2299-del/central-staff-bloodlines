@@ -146,6 +146,41 @@ function printsBox(initial, onChange) {
 }
 
 /* ============================ formulário ============================ */
+/**
+ * Etapa 10 · outros entrevistadores e acompanhantes (documento 01, seção 5.2 e Decisão 6):
+ * escolher na lista da staff ou digitar o Discord ID. Altera `list` no lugar.
+ */
+function participantsPanel(staff, list, myId, onChange) {
+  const nameOf = (id) => staff.find((s) => s.discord_id === id)?.display_name ?? id;
+  const ul = h('ul', { class: 'al-team', id: 'al-team' });
+  const who = h('input', { class: 'input', id: 'al-team-who', list: 'al-team-staff', autocomplete: 'off', placeholder: 'Nome da staff ou Discord ID' });
+  const role = h('select', { class: 'input', id: 'al-team-role', 'aria-label': 'Papel' },
+    h('option', { value: 'entrevistador' }, 'Entrevistador'), h('option', { value: 'acompanhante' }, 'Acompanhante'));
+  const err = h('p', { class: 'field-error', id: 'al-team-err', role: 'alert', hidden: true });
+  const draw = () => ul.replaceChildren(...list.map((p, i) => h('li', { class: 'al-team-item' },
+    h('span', {}, h('strong', {}, nameOf(p.discord_id)), ` · ${p.role === 'acompanhante' ? 'Acompanhante' : 'Entrevistador'}`),
+    h('button', { type: 'button', class: 'btn btn--sm btn--ghost', 'aria-label': `Tirar ${nameOf(p.discord_id)}`, onclick: () => { list.splice(i, 1); onChange(); draw(); } }, icon('x')))));
+  const add = () => {
+    const v = who.value.trim();
+    const id = staff.find((s) => s.display_name.toLowerCase() === v.toLowerCase())?.discord_id ?? v;
+    err.hidden = true;
+    if (!/^[0-9]{17,20}$/.test(id)) { err.textContent = 'Escolha alguém da lista ou digite um Discord ID (17 a 20 números).'; err.hidden = false; return; }
+    if (id === myId || list.some((p) => p.discord_id === id)) { err.textContent = 'Essa pessoa já está na entrevista.'; err.hidden = false; return; }
+    list.push({ discord_id: id, role: role.value });
+    who.value = '';
+    onChange();
+    draw();
+  };
+  who.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+  draw();
+  return h('section', { class: 'panel', 'aria-labelledby': 'al-team-title' },
+    h('h2', { class: 'block-title', id: 'al-team-title' }, icon('users'), 'Entrevistadores e acompanhantes'),
+    h('p', { class: 'panel-text' }, 'Quem participou com você. Conta no painel de produtividade (acompanhante numa coluna à parte).'),
+    h('datalist', { id: 'al-team-staff' }, staff.filter((s) => s.discord_id !== myId).map((s) => h('option', { value: s.display_name }))),
+    h('div', { class: 'al-inline' }, who, role, h('button', { type: 'button', class: 'btn', id: 'al-team-add', onclick: add }, icon('plus'), 'Adicionar')),
+    err, ul);
+}
+
 export function renderAlForm(app, kind, id = null) {
   if (alDenied(app)) return null;
   let alive = true;
@@ -162,12 +197,13 @@ export function renderAlForm(app, kind, id = null) {
     body));
 
   async function load() {
-    const [names, items, questions, current, urls] = await Promise.all([
+    const [names, items, questions, current, urls, staffNames] = await Promise.all([
       app.adapter.listBlockedNames(),
       kind === 'entrevista' ? app.adapter.listChecklistItems() : Promise.resolve({ data: [] }),
       kind === 'entrevista' ? app.adapter.listInterviewQuestions() : Promise.resolve({ data: [] }),
       id ? app.adapter.getAlEvaluation(id) : Promise.resolve({ data: null }),
       id ? app.adapter.getAlPrintUrls(id) : Promise.resolve({ data: [] }),
+      kind === 'entrevista' ? app.adapter.listStaffNames() : Promise.resolve({ data: [] }),
     ]);
     if (!alive) return;
     const err = [names, items, questions, current].find((r) => r.error);
@@ -178,7 +214,7 @@ export function renderAlForm(app, kind, id = null) {
       return;
     }
     const urlOf = new Map((urls.data ?? []).map((u) => [u.id, u.url]));
-    const config = { index: buildNameIndex(names.data), items: items.data, questions: questions.data };
+    const config = { index: buildNameIndex(names.data), items: items.data, questions: questions.data, staff: staffNames.data ?? [] };
     build(ev, config, (ev?.attachments ?? []).map((a) => ({ ...a, url: urlOf.get(a.id) ?? '' })).filter((a) => a.url));
   }
 
@@ -192,6 +228,7 @@ export function renderAlForm(app, kind, id = null) {
       player_age: ev?.player_age ?? '', character_name: ev?.character_name ?? '', submitted_at_text: ev?.submitted_at_text ?? '',
       eval_flags: [...(ev?.eval_flags ?? [])], status: ev?.status ?? null, reason: ev?.reason ?? '', notes: ev?.notes ?? '',
       checked: new Set((ev?.checklist ?? []).map((c) => c.item_id)),
+      participants: (ev?.participants ?? []).filter((p) => p.role !== 'responsavel').map((p) => ({ discord_id: p.discord_id, role: p.role })),
       answers: new Map((ev?.answers ?? []).filter((a) => a.question_id).map((a) => [a.question_id, { note: a.note, send: a.send_to_discord }])),
     };
     const touch = () => { dirty = true; };
@@ -438,6 +475,7 @@ export function renderAlForm(app, kind, id = null) {
         status: st.status, reason: st.status === 'reprovado' ? st.reason : '', notes: st.notes,
         ...(kind === 'entrevista' ? {
           checklist: checklistSnapshot(config.items, st.checked),
+          participants: st.participants,
           answers: config.questions.filter((q) => { const a = st.answers.get(q.id); return a && (a.note.trim() || a.send); })
             .map((q) => ({ question_id: q.id, question_text: q.question, note: st.answers.get(q.id).note, send_to_discord: st.answers.get(q.id).send })),
         } : {}),
@@ -483,6 +521,7 @@ export function renderAlForm(app, kind, id = null) {
       h('p', { class: 'panel-text', id: 'al-responsible' }, 'Responsável: ', h('strong', {}, me.display_name), ' (você)'),
       h('div', { class: 'staff-form-grid' }, Object.values(f).filter(Boolean).map((x) => x.el)),
       minorBanner, nameBanner);
+    const team = kind === 'entrevista' ? participantsPanel(config.staff, st.participants, me.discord_id, touch) : null;
     const evaluation = h('section', { class: 'panel', 'aria-labelledby': 'al-eval-title' },
       h('h2', { class: 'block-title', id: 'al-eval-title' }, icon('checklist'), 'Avaliação do candidato'),
       h('div', { class: 'al-flags', role: 'group', 'aria-labelledby': 'al-eval-title' }, flagBtns),
@@ -493,7 +532,7 @@ export function renderAlForm(app, kind, id = null) {
       h('h2', { class: 'block-title', id: 'al-prints-title' }, icon('photo'), 'Prints da avaliação'), prints.el);
     const actions = h('div', { class: 'form-actions al-actions' }, newBtn, saveBtn, send);
 
-    const formCol = h('div', { class: 'al-form' }, identity,
+    const formCol = h('div', { class: 'al-form' }, identity, team,
       kind === 'entrevista' && checklist.el, printsPanel, evaluation, kind === 'entrevista' && gabarito.el, errorEl, actions);
     body.replaceChildren(kind === 'allowlist' ? h('div', { class: 'al-grid' }, formCol, previewWrap) : formCol);
     update('init');

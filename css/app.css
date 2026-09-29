@@ -1175,3 +1175,58 @@ input[type="file"].input::file-selector-button {
   body.print-card .is-printing { position: absolute; inset: 0 auto auto 0; width: 100%; }
 }
 .field[hidden] { display: none; }
+
+/* ---------- Etapas 8 a 10: Lore (personagens), participantes da entrevista e produtividade ---------- */
+.char-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+.char-link {
+  display: flex; gap: var(--space-3); align-items: center; height: 100%;
+  padding: var(--space-3); color: var(--text); text-decoration: none;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.char-link:hover, .char-link:focus-visible { border-color: var(--pink-border); }
+.char-photo { flex: none; width: 56px; height: 56px; border-radius: 50%; object-fit: cover; background: var(--surface-2); }
+.char-photo--lg { width: 120px; height: 120px; }
+.char-photo--empty { display: grid; place-items: center; color: var(--text-2); font-weight: 700; border: 1px solid var(--border); }
+.char-photo--lg.char-photo--empty { font-size: var(--fs-xl); }
+.char-info { display: grid; gap: 2px; min-width: 0; justify-items: start; }
+.char-name { font-weight: 700; overflow-wrap: anywhere; }
+.char-meta { color: var(--text-2); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.char-photo-row { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; }
+.panel--private { border-color: var(--warn-border); }
+.note-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.al-team { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.al-team-item { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.al-inline select.input { flex: 0 0 auto; width: auto; }
+
+.prod-periods { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4); }
+.prod-periods .btn[aria-pressed="true"] { background: var(--pink-bg); border-color: var(--pink-border); color: var(--text); }
+.stat-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); margin-bottom: var(--space-6); }
+.stat { display: grid; gap: 2px; padding: var(--space-4); background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); }
+.stat-value { font-size: var(--fs-2xl); font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat-label { font-weight: 600; }
+.stat-sub { color: var(--text-2); font-size: var(--fs-sm); }
+.prod-chart { margin: 0; }
+.prod-chart svg { display: block; width: 100%; height: 160px; }
+.bar--allowlists { fill: var(--blue); }
+.bar--entrevistas { fill: var(--pink); }
+.bar-axis { stroke: var(--border-2); stroke-width: 1; }
+.bar-label { fill: var(--text-2); font-size: 9px; }
+.prod-legend { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; color: var(--text-2); font-size: var(--fs-sm); }
+.legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.legend-dot--allowlists { background: var(--blue); }
+.legend-dot--entrevistas { background: var(--pink); margin-left: var(--space-2); }
+.table-wrap { overflow-x: auto; }
+.prod-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+.prod-table th, .prod-table td { padding: var(--space-2) var(--space-3); text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.prod-table th { color: var(--text-2); font-weight: 600; }
+.prod-table td:first-child { font-variant-numeric: tabular-nums; color: var(--text-2); }
+.prod-idle { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: 0; padding: 0; list-style: none; }
+@media (max-width: 899.98px) {
+  .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+/* Nas telas de Lore e gabarito os botões ficam dentro de cada painel (sem a barra fixa do formulário de procedimento). */
+.character-page .form-actions, .gabarito-page .form-actions, .names-page .form-actions {
+  position: static; flex-wrap: wrap; justify-content: flex-start; padding: 0; background: none; border-top: 0;
+}
+.staff-filters[hidden] { display: none; }
