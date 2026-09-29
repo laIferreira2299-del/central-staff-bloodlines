@@ -947,7 +947,8 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     const { data, error } = await sb.functions.invoke(FUNCTION_NAME, { body });
     if (!error) return data?.error ? fail(data.error.code, data.error.message, data.error.details) : ok(data?.data ?? null);
     const response = error.context;
-    if (typeof response?.json !== 'function') return fail('NETWORK');
+    // Sem resposta legível: função não instalada (o Supabase responde 404 sem CORS) ou rede.
+    if (typeof response?.json !== 'function') return fail('NETWORK', DISCORD_SEND_ERRORS.unreachable);
     const payload = await response.json().catch(() => null);
     if (payload?.error?.code) return fail(payload.error.code, payload.error.message, payload.error.details);
     if (response.status === 404) return fail('NETWORK', DISCORD_SEND_ERRORS.missingFunction);

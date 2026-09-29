@@ -5,7 +5,7 @@
 // Com <id>: continua uma análise própria ainda não enviada; enviada ou de outra pessoa abre o
 // histórico (#/avaliacoes/<id>). As regras vêm de js/core/allowlist.js (as mesmas do banco).
 import { h, icon, toast } from '../dom.js';
-import { confirmDialog } from '../modal.js';
+import { confirmDialog, openDialog } from '../modal.js';
 import { copyButton, formatDate } from '../components.js';
 import { renderMarkdownInto } from '../../core/render-md.js';
 import {
@@ -69,7 +69,11 @@ export function sendBox(app, { kind, sentAt, getId, onSent }) {
     const id = await getId();
     const res = id ? await app.adapter.sendAlToDiscord(id, { webhookId, resend: Boolean(sentAt) }) : null;
     if (!res || res.error) {
-      if (res?.error) { hint.textContent = errorText(res.error); toast(errorText(res.error), 5000); }
+      if (res?.error) {
+        hint.textContent = errorText(res.error);
+        // Janela, não só aviso no canto: quem clicou precisa ver que não foi enviado.
+        openDialog({ title: '✗ Não foi enviado ao Discord', body: errorText(res.error), actions: [{ label: 'Entendi', value: true, variant: 'primary', autofocus: true }] });
+      }
       btn.disabled = false;
       text.textContent = label;
       return;

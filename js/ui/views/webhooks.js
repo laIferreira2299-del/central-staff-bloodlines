@@ -2,7 +2,7 @@
 // A url só entra (campo de senha); nunca aparece na tela nem volta do banco. Testar posta uma
 // mensagem simples pelo servidor (Edge Function enviar-discord).
 import { h, icon, toast } from '../dom.js';
-import { confirmDialog } from '../modal.js';
+import { confirmDialog, openDialog } from '../modal.js';
 import { formatDate, statusBadge } from '../components.js';
 import { AL_LIMITS, WEBHOOK_PURPOSES } from '../../core/allowlist.js';
 import { errorText } from './allowlist.js';
@@ -59,7 +59,8 @@ export function renderWebhooks(app) {
     btn.disabled = true;
     const res = await app.adapter.testDiscordWebhook(w.id);
     btn.disabled = false;
-    toast(res.error ? errorText(res.error) : `✓ Mensagem de teste enviada para "${w.name}". Confira no canal.`, 5000);
+    if (!res.error) { toast(`✓ Mensagem de teste enviada para "${w.name}". Confira no canal.`, 5000); return; }
+    openDialog({ title: '✗ O teste falhou', body: errorText(res.error), actions: [{ label: 'Entendi', value: true, variant: 'primary', autofocus: true }] });
   }
 
   async function remove(w) {

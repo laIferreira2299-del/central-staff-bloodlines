@@ -566,6 +566,7 @@ export const DISCORD_SEND_ERRORS = Object.freeze({
   webhook: 'Webhook inativo, removido ou de outra finalidade. Escolha outro canal.',
   noWebhook: 'Nenhum webhook configurado. Peça a um administrador para cadastrar em Configurações › Webhooks.',
   missingFunction: 'A função de envio ainda não foi instalada no Supabase. Avise a administração.',
+  unreachable: 'Não foi possível falar com a função de envio (enviar-discord). Confira se ela está instalada no Supabase com esse nome exato; se estiver, tente de novo.',
   discord: (status) => `O Discord recusou o envio (HTTP ${status}). O webhook pode ter sido apagado no Discord.`,
 });
 export const TEST_MESSAGE = '✓ Teste de conexão — Bloodlines RP · Central da Staff';
