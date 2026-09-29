@@ -5,7 +5,11 @@
 // Uso: desenvolvimento local (DATA_MODE = 'mock') e testes.
 import {
   EDITABLE_FIELDS, EXPORT_FORMAT, FEATURES, PROCEDURE_DEFAULTS, byStaffName, fail, ok, pickEditable, pickStaffMember,
+  AL_DEFAULTS, WEBHOOK_COLUMNS, pickAlAnswers, pickAlEvaluation, pickAlParticipants, pickWebhook,
 } from './adapter.js';
+import {
+  ALLOWLIST_ERRORS, MAX_PRINTS, normalizeName, printError, validateAlEvaluation, validateAlExtras, validateWebhook,
+} from '../core/allowlist.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
 import {
   PROPOSAL_ERRORS, contentChanged, proposalStatus, EVALUATION_ERRORS, evaluationChangeError, validateEvaluation,
@@ -63,6 +67,20 @@ function initialState(seed, adminId, nowIso) {
   };
 }
 
+/** Etapa 5: dados do módulo de Allowlist (data/allowlist-seed.json), como o 11_allowlist_seed.sql. */
+function allowlistState(seed, nowIso) {
+  const meta = { active: true, created_by: 'sistema', created_at: nowIso, updated_by: 'sistema', updated_at: nowIso };
+  return {
+    questions: (seed?.questions ?? []).map((q) => ({ id: uuid(), ...q, extra_note: q.extra_note ?? '', ...meta })),
+    checklistItems: (seed?.checklist ?? []).map((c) => ({ id: uuid(), ...c, hint: c.hint ?? '', ...meta })),
+    blockedNames: (seed?.blocked_names ?? []).map((n) => ({
+      id: uuid(), name: n.name, name_norm: normalizeName(n.name), kind: n.kind, reason: 'serie', series: n.series,
+      character_id: null, reason_text: '', mode: n.mode ?? 'bloqueia', ...meta,
+    })),
+    alEvaluations: [], alParticipants: [], alAnswers: [], alAttachments: [], webhooks: [],
+  };
+}
+
 /**
  * @param {{
  *   seed?: object[],              procedimentos iniciais (campos editáveis + last_reviewed_at opcional)
@@ -70,15 +88,19 @@ function initialState(seed, adminId, nowIso) {
  *   storage?: Storage|null,       ex.: window.localStorage; null = só memória
  *   storageKey?: string,
  *   now?: () => Date,             relógio (injetável nos testes)
+ *   allowlistSeed?: object,       data/allowlist-seed.json (perguntas, checklist e nomes proibidos)
  * }} [options]
  */
 export function createMockAdapter({
-  seed = [], user = null, storage = null, storageKey = 'bloodlines-kb:mock', now = () => new Date(),
+  seed = [], user = null, storage = null, storageKey = 'bloodlines-kb:mock', now = () => new Date(), allowlistSeed = null,
 } = {}) {
   const nowIso = () => now().toISOString();
   const adminId = MOCK_USERS.admin.discord_id;
+  const fresh = () => ({ ...initialState(seed, adminId, nowIso()), ...allowlistState(allowlistSeed, nowIso()) });
+  /** Arquivos dos prints: só em memória (o armazenamento guarda só os dados). */
+  const printFiles = new Map();
 
-  let state = load() ?? initialState(seed, adminId, nowIso());
+  let state = load() ?? fresh();
   let sessionKey = loadSession() ?? user;
   let offline = false;
   const pendingFailures = new Map();
@@ -90,7 +112,10 @@ export function createMockAdapter({
     try {
       const raw = storage?.getItem(storageKey);
       const parsed = raw ? JSON.parse(raw) : null;
-      return parsed?.v === STATE_VERSION ? parsed : null;
+      if (parsed?.v !== STATE_VERSION) return null;
+      // Estado salvo antes da Etapa 5: ganha os dados da Allowlist sem perder o resto.
+      if (!parsed.questions) Object.assign(parsed, allowlistState(allowlistSeed, nowIso()));
+      return parsed;
     } catch { return null; }
   }
   function loadSession() {
@@ -845,7 +870,218 @@ export function createMockAdapter({
         .slice(0, Math.min(Math.max(1, limit), 500))
         .map((a) => ({ ...clone(a), actor_name: nameOf(a.actor) }))));
     },
+
+    /* ----- Etapa 5: gabarito, checklist e nomes proibidos ----- */
+    async listInterviewQuestions({ includeInactive = false } = {}) {
+      return run('listInterviewQuestions', 'staff', async ({ can }) => {
+        if (!usesAllowlist(can)) return fail('FORBIDDEN', ALLOWLIST_ERRORS.forbidden);
+        return ok(state.questions.filter((q) => includeInactive || q.active)
+          .sort((a, b) => a.position - b.position).map(presentConfig));
+      });
+    },
+
+    async listChecklistItems({ includeInactive = false } = {}) {
+      return run('listChecklistItems', 'staff', async ({ can }) => {
+        if (!usesAllowlist(can)) return fail('FORBIDDEN', ALLOWLIST_ERRORS.forbidden);
+        return ok(state.checklistItems.filter((c) => includeInactive || c.active)
+          .sort((a, b) => a.stage - b.stage || a.position - b.position).map(presentConfig));
+      });
+    },
+
+    async listBlockedNames({ includeInactive = false } = {}) {
+      return run('listBlockedNames', 'staff', async ({ can }) => {
+        if (!usesAllowlist(can) && !can('lore.consultar')) return fail('FORBIDDEN');
+        return ok(state.blockedNames.filter((n) => includeInactive || n.active)
+          .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')).map(presentConfig));
+      });
+    },
+
+    /* ----- Etapa 5: análises de allowlist e entrevistas ----- */
+    async listAlEvaluations({ kind = '', status = '', createdBy = '', query = '', limit = 100, before = null } = {}) {
+      return run('listAlEvaluations', 'staff', async ({ staff, can }) => {
+        const q = normalizeName(query);
+        const hit = (e) => !q || [e.author_handle, e.player_discord_id, e.character_name, e.al_id].some((v) => normalizeName(v).includes(q));
+        // Invertida antes de ordenar: no mesmo milissegundo, a criada por último vem primeiro.
+        return ok([...state.alEvaluations].reverse()
+          .filter((e) => seesEval(e, staff, can) && (!kind || e.kind === kind) && (!status || e.status === status)
+            && (!createdBy || e.created_by === createdBy) && (!before || e.created_at < before) && hit(e))
+          .sort(newestFirst)
+          .slice(0, Math.min(Math.max(1, limit), 200))
+          .map(presentEval));
+      });
+    },
+
+    async getAlEvaluation(id) {
+      return run('getAlEvaluation', 'staff', async ({ staff, can }) => {
+        const e = state.alEvaluations.find((x) => x.id === id);
+        return e && seesEval(e, staff, can) ? ok(detailOf(e)) : evalNotFound();
+      });
+    },
+
+    async saveAlEvaluation(input = {}) {
+      return run('saveAlEvaluation', 'allowlist.avaliar', async ({ staff, can }) => {
+        const before = input.id ? state.alEvaluations.find((x) => x.id === input.id) : null;
+        if (input.id && (!before || !seesEval(before, staff, can))) return evalNotFound();
+        if (before && before.created_by !== staff.discord_id) return fail('FORBIDDEN', ALLOWLIST_ERRORS.notAuthor);
+        if (before?.sent_to_discord_at) return validationError({ _: ALLOWLIST_ERRORS.sent });
+        const next = { ...(before ? clone(before) : { ...clone(AL_DEFAULTS), kind: input.kind }), ...pickAlEvaluation(input) };
+        const { valid, errors } = validateAlEvaluation(next);
+        const answers = Array.isArray(input.answers) ? pickAlAnswers(input.answers) : null;
+        const participants = Array.isArray(input.participants) ? pickAlParticipants(input.participants, staff.discord_id) : null;
+        const extras = validateAlExtras(next.kind, { answers, participants });
+        if (!valid || !extras.valid) return validationError({ ...errors, ...extras.errors });
+        const at = nowIso();
+        let row = before;
+        if (!row) {
+          row = { id: uuid(), kind: next.kind, created_by: staff.discord_id, created_at: at, sent_to_discord_at: null, discord_status: '' };
+          state.alEvaluations.push(row);
+          state.alParticipants.push({ evaluation_id: row.id, discord_id: staff.discord_id, role: 'responsavel' });
+        }
+        Object.assign(row, pickAlEvaluation(next), { updated_at: at });
+        if (answers) {
+          state.alAnswers = state.alAnswers.filter((a) => a.evaluation_id !== row.id)
+            .concat(answers.map((a) => ({ evaluation_id: row.id, ...a })));
+        }
+        if (participants) {
+          state.alParticipants = state.alParticipants.filter((p) => p.evaluation_id !== row.id || p.role === 'responsavel')
+            .concat(participants.map((p) => ({ evaluation_id: row.id, ...p })));
+        }
+        save();
+        return ok(detailOf(row));
+      });
+    },
+
+    async addAlPrint(evaluationId, file) {
+      return run('addAlPrint', 'allowlist.avaliar', async ({ staff, can }) => {
+        const e = state.alEvaluations.find((x) => x.id === evaluationId);
+        if (!e || !seesEval(e, staff, can)) return evalNotFound();
+        if (e.created_by !== staff.discord_id) return fail('FORBIDDEN', ALLOWLIST_ERRORS.notAuthor);
+        if (e.sent_to_discord_at) return validationError({ _: ALLOWLIST_ERRORS.sent });
+        const used = state.alAttachments.filter((a) => a.evaluation_id === e.id);
+        const bad = printError(file, used.length);
+        if (bad) return validationError({ file: bad });
+        const id = uuid();
+        const ext = file.type.split('/')[1].replace('jpeg', 'jpg');
+        const position = [...Array(MAX_PRINTS).keys()].map((i) => i + 1).find((p) => !used.some((a) => a.position === p));
+        const row = {
+          id, evaluation_id: e.id, storage_path: `${e.id}/${id}.${ext}`, file_name: String(file.name ?? '').slice(0, 200),
+          mime: file.type, size: file.size, position, created_by: staff.discord_id, created_at: nowIso(),
+        };
+        state.alAttachments.push(row);
+        printFiles.set(row.storage_path, file);
+        save();
+        return ok(presentAttachment(row));
+      });
+    },
+
+    async removeAlPrint(attachmentId) {
+      return run('removeAlPrint', 'allowlist.avaliar', async ({ staff, can }) => {
+        const a = state.alAttachments.find((x) => x.id === attachmentId);
+        const e = a ? state.alEvaluations.find((x) => x.id === a.evaluation_id) : null;
+        if (!e || !seesEval(e, staff, can)) return fail('NOT_FOUND', 'Print não encontrado.');
+        if (e.created_by !== staff.discord_id) return fail('FORBIDDEN', ALLOWLIST_ERRORS.notAuthor);
+        if (e.sent_to_discord_at) return validationError({ _: ALLOWLIST_ERRORS.sent });
+        state.alAttachments = state.alAttachments.filter((x) => x.id !== attachmentId);
+        printFiles.delete(a.storage_path);
+        save();
+        return ok(null);
+      });
+    },
+
+    async getAlPrintUrls(evaluationId) {
+      return run('getAlPrintUrls', 'staff', async ({ staff, can }) => {
+        const e = state.alEvaluations.find((x) => x.id === evaluationId);
+        if (!e || !seesEval(e, staff, can)) return evalNotFound();
+        return ok(state.alAttachments.filter((a) => a.evaluation_id === e.id).sort((a, b) => a.position - b.position)
+          .map((a) => {
+            const blob = printFiles.get(a.storage_path);
+            const url = blob && globalThis.URL?.createObjectURL ? URL.createObjectURL(blob) : `mock://al-prints/${a.storage_path}`;
+            return { id: a.id, url };
+          }));
+      });
+    },
+
+    /* ----- Etapa 5: webhooks do Discord (a url nunca sai) ----- */
+    async listDiscordWebhooks({ purpose = '' } = {}) {
+      return run('listDiscordWebhooks', 'staff', async ({ can }) => ok(state.webhooks
+        .filter((w) => seesWebhook(w, can) && (!purpose || w.purpose === purpose))
+        .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+        .map(presentWebhook)));
+    },
+
+    async saveDiscordWebhook(input = {}) {
+      return run('saveDiscordWebhook', 'webhooks.gerenciar', async ({ staff }) => {
+        const row = input.id ? state.webhooks.find((w) => w.id === input.id) : null;
+        if (input.id && !row) return fail('NOT_FOUND', 'Webhook não encontrado.');
+        const patch = pickWebhook(input);
+        const next = { channel_name: '', sender_name: '', sender_avatar_url: '', active: true, ...(row ? presentWebhook(row) : {}), ...patch };
+        const { valid, errors } = validateWebhook(next, { creating: !row });
+        if (!valid) return validationError(errors);
+        const cols = ['name', 'purpose', 'channel_name', 'sender_name', 'active'];
+        const snap = (w) => Object.fromEntries(cols.map((c) => [c, w[c]]));
+        const before = row ? snap(row) : null;
+        const at = nowIso();
+        const target = row ?? { id: uuid(), created_by: staff.discord_id, created_at: at };
+        const urlChanged = Boolean(row && next.url && next.url !== row.url);
+        Object.assign(target, {
+          name: next.name, url: next.url ?? row?.url, purpose: next.purpose, channel_name: next.channel_name,
+          sender_name: next.sender_name, sender_avatar_url: next.sender_avatar_url, active: next.active,
+          updated_by: staff.discord_id, updated_at: at,
+        });
+        if (!row) state.webhooks.push(target);
+        const after = { ...snap(target), ...(urlChanged ? { endereco_trocado: true } : {}) };
+        if (!row || JSON.stringify(before) !== JSON.stringify(after)) {
+          audit(staff, 'webhook', target.id, !row ? 'cadastrado' : before.active !== target.active ? (target.active ? 'ativado' : 'desativado') : 'alterado', before, after);
+        }
+        save();
+        return ok(presentWebhook(target));
+      });
+    },
+
+    async deleteDiscordWebhook(id) {
+      return run('deleteDiscordWebhook', 'webhooks.gerenciar', async ({ staff }) => {
+        const row = state.webhooks.find((w) => w.id === id);
+        if (!row) return fail('NOT_FOUND', 'Webhook não encontrado.');
+        state.webhooks = state.webhooks.filter((w) => w.id !== id);
+        audit(staff, 'webhook', id, 'removido', { name: row.name, purpose: row.purpose, channel_name: row.channel_name, sender_name: row.sender_name, active: row.active }, null);
+        save();
+        return ok(null);
+      });
+    },
   };
+
+  /* ---------- Etapa 5: apoio da Allowlist ---------- */
+  function usesAllowlist(can) {
+    return can('allowlist.avaliar') || can('allowlist.historico') || can('lore.gerenciar');
+  }
+  function seesEval(e, staff, can) {
+    return can('allowlist.historico') || e.created_by === staff.discord_id
+      || state.alParticipants.some((p) => p.evaluation_id === e.id && p.discord_id === staff.discord_id);
+  }
+  function seesWebhook(w, can) {
+    return can('webhooks.gerenciar')
+      || (w.active && ((['allowlist', 'entrevista'].includes(w.purpose) && can('allowlist.avaliar')) || (w.purpose === 'avisos' && can('avisos.enviar'))));
+  }
+  function evalNotFound() { return fail('NOT_FOUND', 'Análise não encontrada.'); }
+  function presentConfig(row) { return clone(row); }
+  function presentEval(e) { return { ...clone(e), created_by_name: nameOf(e.created_by) }; }
+  function presentAttachment(a) {
+    const { evaluation_id, created_by, ...rest } = clone(a);
+    return rest;
+  }
+  function presentWebhook(w) { return Object.fromEntries(WEBHOOK_COLUMNS.map((c) => [c, clone(w[c])])); }
+  function detailOf(e) {
+    return {
+      ...presentEval(e),
+      participants: state.alParticipants.filter((p) => p.evaluation_id === e.id)
+        .map(({ discord_id, role }) => ({ discord_id, role, display_name: nameOf(discord_id) }))
+        .sort((a, b) => (a.role === 'responsavel' ? -1 : b.role === 'responsavel' ? 1 : 0)),
+      answers: state.alAnswers.filter((a) => a.evaluation_id === e.id).sort((a, b) => a.position - b.position)
+        .map(({ evaluation_id, ...a }) => clone(a)),
+      attachments: state.alAttachments.filter((a) => a.evaluation_id === e.id).sort((a, b) => a.position - b.position)
+        .map(presentAttachment),
+    };
+  }
 
   /** Controles só do mock (não fazem parte do contrato). */
   const mock = {
@@ -858,6 +1094,13 @@ export function createMockAdapter({
     },
     /** Simula queda de rede: toda operação que precisa do servidor devolve NETWORK. */
     setOffline(value) { offline = Boolean(value); },
+    /** Simula a Edge Function do Discord (Etapa 7): marca a análise como enviada. */
+    markSent(evaluationId, status = 'enviado') {
+      const e = state.alEvaluations.find((x) => x.id === evaluationId);
+      if (!e) throw new Error(`Análise desconhecida: ${evaluationId}`);
+      Object.assign(e, { sent_to_discord_at: nowIso(), discord_status: status });
+      save();
+    },
     /** Faz a PRÓXIMA chamada do método falhar com o código indicado (ex.: testar reversão otimista). */
     failNext(method, code = 'NETWORK') { pendingFailures.set(method, code); },
     /**
@@ -872,7 +1115,8 @@ export function createMockAdapter({
     },
     /** Volta ao estado inicial com o seed indicado. */
     reset(newSeed = seed) {
-      state = initialState(newSeed, adminId, nowIso());
+      state = { ...initialState(newSeed, adminId, nowIso()), ...allowlistState(allowlistSeed, nowIso()) };
+      printFiles.clear();
       pendingFailures.clear();
       offline = false;
       save();

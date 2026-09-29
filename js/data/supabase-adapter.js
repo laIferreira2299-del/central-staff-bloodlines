@@ -6,7 +6,11 @@ import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from '../config.js';
 import {
   EDITABLE_FIELDS, EXPORT_FORMAT, PROCEDURE_DEFAULTS, byStaffName, fail, ok, pickEditable, pickStaffMember,
+  AL_DEFAULTS, WEBHOOK_COLUMNS, pickAlAnswers, pickAlEvaluation, pickAlParticipants, pickWebhook,
 } from './adapter.js';
+import {
+  ALLOWLIST_ERRORS, MAX_PRINTS, printError, validateAlEvaluation, validateAlExtras, validateWebhook,
+} from '../core/allowlist.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
 import {
   PROPOSAL_ERRORS, PROPOSAL_NOTE_MAX, proposalStatus, validateAnnouncement, validateEvaluation,
@@ -18,6 +22,20 @@ import {
 const STAFF_COLUMNS = 'discord_id, display_name, role, teams, active, created_at';
 const EVALUATION_COLUMNS = 'id, period_id, evaluated_id, evaluator_id, status, criteria, overall, strengths, improvements, '
   + 'feedback, recommendation, created_at, updated_at, submitted_at, read_by, read_at';
+/** Nunca inclui url: o site não tem privilégio de leitura nessa coluna (10_allowlist.sql). */
+const WEBHOOK_SELECT = WEBHOOK_COLUMNS.join(', ');
+const ATTACHMENT_COLUMNS = 'id, evaluation_id, storage_path, file_name, mime, size, position, created_at';
+const PRINTS_BUCKET = 'al-prints';
+
+/**
+ * Busca do histórico → filtro "or" do PostgREST. Tira os caracteres que mudam a sintaxe
+ * do filtro (vírgula, parênteses, aspas, curingas) e põe o valor entre aspas.
+ */
+export function alSearchFilter(query) {
+  const q = String(query ?? '').replace(/[,()"\\%*:]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+  if (!q) return null;
+  return ['author_handle', 'player_discord_id', 'character_name', 'al_id'].map((c) => `${c}.ilike."%${q}%"`).join(',');
+}
 
 /** Perfil do banco → formato do contrato. */
 function toStaff(profile) {
@@ -702,7 +720,241 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       await loadNames();
       return ok(data.map((a) => ({ ...a, actor_name: nameOf(a.actor) })));
     },
+
+    /* ----- Etapa 5: gabarito, checklist e nomes proibidos (supabase/10_allowlist.sql) ----- */
+    async listInterviewQuestions({ includeInactive = false } = {}) {
+      const { can, error: g } = await guard();
+      if (g) return g;
+      if (!usesAllowlist(can)) return fail('FORBIDDEN', ALLOWLIST_ERRORS.forbidden);
+      let q = sb.from('interview_questions').select('*').order('position');
+      if (!includeInactive) q = q.eq('active', true);
+      const { data, error, status } = await q;
+      return error ? failFrom(error, status) : ok(data);
+    },
+
+    async listChecklistItems({ includeInactive = false } = {}) {
+      const { can, error: g } = await guard();
+      if (g) return g;
+      if (!usesAllowlist(can)) return fail('FORBIDDEN', ALLOWLIST_ERRORS.forbidden);
+      let q = sb.from('al_checklist_items').select('*').order('stage').order('position');
+      if (!includeInactive) q = q.eq('active', true);
+      const { data, error, status } = await q;
+      return error ? failFrom(error, status) : ok(data);
+    },
+
+    async listBlockedNames({ includeInactive = false } = {}) {
+      const { can, error: g } = await guard();
+      if (g) return g;
+      if (!usesAllowlist(can) && !can('lore.consultar')) return fail('FORBIDDEN');
+      let q = sb.from('blocked_names').select('*').order('name');
+      if (!includeInactive) q = q.eq('active', true);
+      const { data, error, status } = await q;
+      return error ? failFrom(error, status) : ok(data.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')));
+    },
+
+    /* ----- Etapa 5: análises de allowlist e entrevistas ----- */
+    async listAlEvaluations({ kind = '', status: st = '', createdBy = '', query = '', limit = 100, before = null } = {}) {
+      const { error: g } = await guard();
+      if (g) return g;
+      let q = sb.from('al_evaluations').select('*').order('created_at', { ascending: false }).limit(Math.min(Math.max(1, limit), 200));
+      if (kind) q = q.eq('kind', kind);
+      if (st) q = q.eq('status', st);
+      if (createdBy) q = q.eq('created_by', createdBy);
+      if (before) q = q.lt('created_at', before);
+      const search = alSearchFilter(query);
+      if (search) q = q.or(search);
+      const { data, error, status } = await q;
+      if (error) return failFrom(error, status);
+      await loadNames();
+      return ok(data.map(presentAl));
+    },
+
+    async getAlEvaluation(id) {
+      const { error: g } = await guard();
+      if (g) return g;
+      return alDetail(id);
+    },
+
+    async saveAlEvaluation(input = {}) {
+      const { staff, error: g } = await guard('allowlist.avaliar');
+      if (g) return g;
+      let before = null;
+      if (input.id) {
+        const found = await fetchAl(input.id);
+        if (found.error) return found.error;
+        before = found.row;
+        if (before.created_by !== staff.discord_id) return fail('FORBIDDEN', ALLOWLIST_ERRORS.notAuthor);
+        if (before.sent_to_discord_at) return validation({ _: ALLOWLIST_ERRORS.sent });
+      }
+      const next = { ...(before ?? { ...structuredClone(AL_DEFAULTS), kind: input.kind }), ...pickAlEvaluation(input) };
+      const { valid, errors } = validateAlEvaluation(next);
+      const answers = Array.isArray(input.answers) ? pickAlAnswers(input.answers) : null;
+      const participants = Array.isArray(input.participants) ? pickAlParticipants(input.participants, staff.discord_id) : null;
+      const extras = validateAlExtras(next.kind, { answers, participants });
+      if (!valid || !extras.valid) return validation({ ...errors, ...extras.errors });
+      const fields = pickAlEvaluation(next);
+      const q = before
+        ? sb.from('al_evaluations').update(fields).eq('id', before.id)
+        : sb.from('al_evaluations').insert({ kind: next.kind, ...fields });
+      const { data: row, error, status } = await q.select('*').maybeSingle();
+      if (error) return failFrom(error, status);
+      if (!row) return fail('NOT_FOUND', 'Análise não encontrada.');
+      // Respostas e participantes: substitui os atuais (se o passo falhar, a análise já está salva;
+      // salvar de novo com o id completa).
+      if (answers) {
+        const del = await sb.from('al_evaluation_answers').delete().eq('evaluation_id', row.id);
+        if (del.error) return failFrom(del.error, del.status);
+        if (answers.length) {
+          const ins = await sb.from('al_evaluation_answers').insert(answers.map((a) => ({ evaluation_id: row.id, ...a })));
+          if (ins.error) return failFrom(ins.error, ins.status);
+        }
+      }
+      if (participants) {
+        const del = await sb.from('al_evaluation_participants').delete().eq('evaluation_id', row.id).neq('role', 'responsavel');
+        if (del.error) return failFrom(del.error, del.status);
+        if (participants.length) {
+          const ins = await sb.from('al_evaluation_participants').insert(participants.map((p) => ({ evaluation_id: row.id, ...p })));
+          if (ins.error) return failFrom(ins.error, ins.status);
+        }
+      }
+      return alDetail(row.id);
+    },
+
+    async addAlPrint(evaluationId, file) {
+      const { staff, error: g } = await guard('allowlist.avaliar');
+      if (g) return g;
+      const found = await fetchAl(evaluationId);
+      if (found.error) return found.error;
+      if (found.row.created_by !== staff.discord_id) return fail('FORBIDDEN', ALLOWLIST_ERRORS.notAuthor);
+      if (found.row.sent_to_discord_at) return validation({ _: ALLOWLIST_ERRORS.sent });
+      const used = await sb.from('al_attachments').select('position').eq('evaluation_id', evaluationId);
+      if (used.error) return failFrom(used.error, used.status);
+      const bad = printError(file, used.data.length);
+      if (bad) return validation({ file: bad });
+      const position = [...Array(MAX_PRINTS).keys()].map((i) => i + 1).find((p) => !used.data.some((a) => a.position === p));
+      const path = `${evaluationId}/${globalThis.crypto.randomUUID()}.${file.type.split('/')[1].replace('jpeg', 'jpg')}`;
+      const up = await sb.storage.from(PRINTS_BUCKET).upload(path, file, { contentType: file.type, upsert: false });
+      if (up.error) return failFrom(up.error, up.error.statusCode ?? up.error.status);
+      const { data, error, status } = await sb.from('al_attachments').insert({
+        evaluation_id: evaluationId, storage_path: path, file_name: String(file.name ?? '').slice(0, 200),
+        mime: file.type, size: file.size, position,
+      }).select(ATTACHMENT_COLUMNS).single();
+      if (error) {
+        await sb.storage.from(PRINTS_BUCKET).remove([path]);
+        return failFrom(error, status);
+      }
+      return ok(presentAttachment(data));
+    },
+
+    async removeAlPrint(attachmentId) {
+      const { staff, error: g } = await guard('allowlist.avaliar');
+      if (g) return g;
+      const { data: att, error: e, status: s } = await sb.from('al_attachments').select(ATTACHMENT_COLUMNS).eq('id', attachmentId).maybeSingle();
+      if (e) return failFrom(e, s);
+      if (!att) return fail('NOT_FOUND', 'Print não encontrado.');
+      const found = await fetchAl(att.evaluation_id);
+      if (found.error) return found.error;
+      if (found.row.created_by !== staff.discord_id) return fail('FORBIDDEN', ALLOWLIST_ERRORS.notAuthor);
+      if (found.row.sent_to_discord_at) return validation({ _: ALLOWLIST_ERRORS.sent });
+      const { data, error, status } = await sb.from('al_attachments').delete().eq('id', attachmentId).select('id');
+      if (error) return failFrom(error, status);
+      if (!data?.length) return fail('NOT_FOUND', 'Print não encontrado.');
+      // Se o arquivo não sair do Storage, sobra só o arquivo (a limpeza de 90 dias apaga).
+      await sb.storage.from(PRINTS_BUCKET).remove([att.storage_path]);
+      return ok(null);
+    },
+
+    async getAlPrintUrls(evaluationId) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const found = await fetchAl(evaluationId);
+      if (found.error) return found.error;
+      const { data, error, status } = await sb.from('al_attachments').select(ATTACHMENT_COLUMNS)
+        .eq('evaluation_id', evaluationId).order('position');
+      if (error) return failFrom(error, status);
+      if (!data.length) return ok([]);
+      const signed = await sb.storage.from(PRINTS_BUCKET).createSignedUrls(data.map((a) => a.storage_path), 3600);
+      if (signed.error) return failFrom(signed.error, signed.error.statusCode ?? signed.error.status);
+      const byPath = new Map((signed.data ?? []).map((x) => [x.path, x.signedUrl]));
+      return ok(data.filter((a) => byPath.get(a.storage_path)).map((a) => ({ id: a.id, url: byPath.get(a.storage_path) })));
+    },
+
+    /* ----- Etapa 5: webhooks do Discord (a url nunca é lida) ----- */
+    async listDiscordWebhooks({ purpose = '' } = {}) {
+      const { error: g } = await guard();
+      if (g) return g;
+      let q = sb.from('discord_webhooks').select(WEBHOOK_SELECT).order('name');
+      if (purpose) q = q.eq('purpose', purpose);
+      const { data, error, status } = await q;
+      return error ? failFrom(error, status) : ok(data.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')));
+    },
+
+    async saveDiscordWebhook(input = {}) {
+      const { error: g } = await guard('webhooks.gerenciar');
+      if (g) return g;
+      let current = null;
+      if (input.id) {
+        const { data, error, status } = await sb.from('discord_webhooks').select(WEBHOOK_SELECT).eq('id', input.id).maybeSingle();
+        if (error) return failFrom(error, status);
+        if (!data) return fail('NOT_FOUND', 'Webhook não encontrado.');
+        current = data;
+      }
+      const patch = pickWebhook(input);
+      const next = { channel_name: '', sender_name: '', sender_avatar_url: '', active: true, ...(current ?? {}), ...patch };
+      const { valid, errors } = validateWebhook(next, { creating: !current });
+      if (!valid) return validation(errors);
+      if (current && !Object.keys(patch).length) return ok(current);
+      const row = current ? patch : {
+        name: next.name, url: next.url, purpose: next.purpose, channel_name: next.channel_name,
+        sender_name: next.sender_name, sender_avatar_url: next.sender_avatar_url, active: next.active,
+      };
+      const q = current
+        ? sb.from('discord_webhooks').update(row).eq('id', current.id)
+        : sb.from('discord_webhooks').insert(row);
+      const { data, error, status } = await q.select(WEBHOOK_SELECT).maybeSingle();
+      if (error) return failFrom(error, status);
+      return data ? ok(data) : fail('NOT_FOUND', 'Webhook não encontrado.');
+    },
+
+    async deleteDiscordWebhook(id) {
+      const { error: g } = await guard('webhooks.gerenciar');
+      if (g) return g;
+      const { data, error, status } = await sb.from('discord_webhooks').delete().eq('id', id).select('id');
+      if (error) return failFrom(error, status);
+      return data?.length ? ok(null) : fail('NOT_FOUND', 'Webhook não encontrado.');
+    },
   };
+
+  /* ---------- Etapa 5: apoio da Allowlist ---------- */
+  const usesAllowlist = (can) => can('allowlist.avaliar') || can('allowlist.historico') || can('lore.gerenciar');
+  const presentAl = (e) => ({ ...e, eval_flags: e.eval_flags ?? [], checklist: e.checklist ?? [], created_by_name: nameOf(e.created_by) });
+  const presentAttachment = ({ evaluation_id, ...a }) => a;
+
+  async function fetchAl(id) {
+    const { data, error, status } = await sb.from('al_evaluations').select('*').eq('id', id).maybeSingle();
+    if (error) return { error: failFrom(error, status) };
+    if (!data) return { error: fail('NOT_FOUND', 'Análise não encontrada.') };
+    return { row: data };
+  }
+
+  async function alDetail(id) {
+    const found = await fetchAl(id);
+    if (found.error) return found.error;
+    const [parts, answers, atts] = await Promise.all([
+      sb.from('al_evaluation_participants').select('discord_id, role').eq('evaluation_id', id),
+      sb.from('al_evaluation_answers').select('question_id, question_text, note, send_to_discord, position').eq('evaluation_id', id).order('position'),
+      sb.from('al_attachments').select(ATTACHMENT_COLUMNS).eq('evaluation_id', id).order('position'),
+      loadNames(),
+    ]);
+    for (const r of [parts, answers, atts]) if (r.error) return failFrom(r.error, r.status);
+    return ok({
+      ...presentAl(found.row),
+      participants: parts.data.map((p) => ({ ...p, display_name: nameOf(p.discord_id) }))
+        .sort((a, b) => (a.role === 'responsavel' ? -1 : b.role === 'responsavel' ? 1 : 0)),
+      answers: answers.data,
+      attachments: atts.data.map(presentAttachment),
+    });
+  }
 
   const seesEvaluations = (can) => can('avaliacoes.criar') || can('avaliacoes.ler') || can('avaliacoes.gerenciar');
   const presentProposal = (p) => ({ ...p, created_by_name: nameOf(p.created_by), reviewed_by_name: nameOf(p.reviewed_by) });

@@ -50,6 +50,14 @@
 //     períodos, critérios e arquivar: avaliacoes.gerenciar. Travas em js/core/workflow.js.
 //   Etapa 11 · avisos                    criar, editar, apagar e relatório: avisos.enviar
 //   Etapa 11 · auditoria                 listAudit: auditoria.ver (só leitura)
+//   Etapa 5 · allowlist e entrevistas    (regras em js/core/allowlist.js; banco no 10_allowlist.sql)
+//     gabarito e checklist: allowlist.avaliar, allowlist.historico ou lore.gerenciar
+//     nomes proibidos: os mesmos ou lore.consultar
+//     análises: criar allowlist.avaliar · ler: o autor e os participantes (allowlist.historico lê
+//     todas; invisível = NOT_FOUND) · editar, prints: só o autor (FORBIDDEN com
+//     ALLOWLIST_ERRORS.notAuthor), só até o envio ao Discord (VALIDATION sent) · ninguém apaga
+//     webhooks: webhooks.gerenciar cadastra e vê todos; quem avalia vê os ativos de allowlist e
+//     entrevista; avisos.enviar vê os ativos de avisos (os outros: lista vazia). A url NUNCA volta.
 //   Sem a permissão = FORBIDDEN. Padrão por cargo: documento 01-controle-da-staff, seção 2.
 //
 // Travas da equipe (js/core/permissions.js, staffChangeError): ninguém altera o próprio
@@ -127,6 +135,26 @@
  * }} Announcement  (audience_roles vazio = todos)
  * @typedef {{ discord_id: string, display_name: string, role: Role, read_at: string|null, acknowledged_at: string|null }} ReadReportRow
  * @typedef {{ id: number, at: string, actor: string, actor_name: string|null, entity: string, entity_id: string, action: string, before: object|null, after: object|null }} AuditEntry
+ *
+ * Etapa 5 · allowlist e entrevistas
+ * @typedef {{ id: string, section: string, kind: string, question: string, answer: string, extra_note: string, position: number, active: boolean }} InterviewQuestion
+ * @typedef {{ id: string, stage: number, stage_title: string, text: string, hint: string, position: number, active: boolean }} ChecklistItem
+ * @typedef {{ id: string, name: string, name_norm: string, kind: 'nome'|'sobrenome', reason: 'serie'|'em_uso'|'outro', series: string,
+ *   character_id: string|null, reason_text: string, mode: 'bloqueia'|'alerta', active: boolean }} BlockedName
+ * @typedef {{
+ *   id: string, kind: 'allowlist'|'entrevista', al_id: string, author_handle: string, player_discord_id: string,
+ *   player_age: number|null, character_name: string, submitted_at_text: string, eval_flags: string[],
+ *   status: 'aprovado'|'reprovado', reason: string, notes: string, checklist: Array<{ item_id: string, stage: number, text: string }>,
+ *   created_by: string, created_by_name: string|null, created_at: string, updated_at: string,
+ *   sent_to_discord_at: string|null, discord_status: string
+ * }} AlEvaluation
+ * @typedef {{ question_id: string|null, question_text: string, note: string, send_to_discord: boolean, position: number }} AlAnswer
+ * @typedef {{ discord_id: string, role: 'responsavel'|'entrevistador'|'acompanhante', display_name: string|null }} AlParticipant
+ * @typedef {{ id: string, storage_path: string, file_name: string, mime: string, size: number, position: number, created_at: string }} AlAttachment
+ * @typedef {AlEvaluation & { participants: AlParticipant[], answers: AlAnswer[], attachments: AlAttachment[] }} AlEvaluationDetail
+ * @typedef {{ id: string, name: string, purpose: 'allowlist'|'entrevista'|'avisos'|'outro', channel_name: string, sender_name: string,
+ *   sender_avatar_url: string, active: boolean, created_by: string, created_at: string, updated_by: string, updated_at: string }} DiscordWebhook
+ *   (sem url: o endereço só entra, nunca sai)
  */
 
 /**
@@ -202,6 +230,26 @@
  * @property {(id: string) => Result<ReadReportRow[]>} getAnnouncementReport   avisos.enviar.
  * @property {(f?: { entity?: string, entityId?: string, limit?: number, before?: number }) => Result<AuditEntry[]>} listAudit
  *           auditoria.ver. Mais recentes primeiro; `before` = id para a próxima página.
+ *
+ * Etapa 5 · allowlist e entrevistas (sem `includeInactive`, só os ativos; por posição)
+ * @property {(o?: { includeInactive?: boolean }) => Result<InterviewQuestion[]>} listInterviewQuestions
+ * @property {(o?: { includeInactive?: boolean }) => Result<ChecklistItem[]>} listChecklistItems   Por etapa e posição.
+ * @property {(o?: { includeInactive?: boolean }) => Result<BlockedName[]>} listBlockedNames      Por nome.
+ * @property {(f?: { kind?: string, status?: string, createdBy?: string, query?: string, limit?: number, before?: string }) => Result<AlEvaluation[]>} listAlEvaluations
+ *           As que a pessoa pode ver, mais recentes primeiro. query = trecho do @, Discord ID, personagem
+ *           ou ID da AL; before = created_at para a próxima página; limit de 1 a 200 (padrão 100).
+ * @property {(id: string) => Result<AlEvaluationDetail>} getAlEvaluation
+ * @property {(e: object & { answers?: object[], participants?: object[] }) => Result<AlEvaluationDetail>} saveAlEvaluation
+ *           Cria (sem id) ou edita. answers (só entrevista) e participants (entrevistador/acompanhante),
+ *           se vierem, SUBSTITUEM os atuais. Campos inválidos = VALIDATION por campo; travas = errors._.
+ * @property {(evaluationId: string, file: Blob & { name?: string }) => Result<AlAttachment>} addAlPrint
+ *           PNG/JPG/WEBP de até 8 MB, até 9 por análise (VALIDATION em errors.file).
+ * @property {(attachmentId: string) => Result<null>} removeAlPrint
+ * @property {(evaluationId: string) => Result<Array<{ id: string, url: string }>>} getAlPrintUrls   Links temporários (1 hora).
+ * @property {(o?: { purpose?: string }) => Result<DiscordWebhook[]>} listDiscordWebhooks   Por nome.
+ * @property {(w: object) => Result<DiscordWebhook>} saveDiscordWebhook
+ *           webhooks.gerenciar. Cria (url obrigatória) ou edita (url vazia = mantém a atual).
+ * @property {(id: string) => Result<null>} deleteDiscordWebhook   webhooks.gerenciar.
  */
 
 export const ERROR_CODES = Object.freeze({
@@ -226,6 +274,70 @@ export const ADAPTER_METHODS = Object.freeze([
   'listEvaluableMembers', 'listEvaluations', 'saveEvaluation', 'deleteEvaluation', 'markEvaluationRead', 'archiveEvaluation',
   'listAnnouncements', 'saveAnnouncement', 'deleteAnnouncement', 'markAnnouncementRead', 'getAnnouncementReport',
   'listAudit',
+  'listInterviewQuestions', 'listChecklistItems', 'listBlockedNames',
+  'listAlEvaluations', 'getAlEvaluation', 'saveAlEvaluation', 'addAlPrint', 'removeAlPrint', 'getAlPrintUrls',
+  'listDiscordWebhooks', 'saveDiscordWebhook', 'deleteDiscordWebhook',
+]);
+
+/** Campos da análise que o cliente pode definir (o resto é do servidor). */
+export const AL_EDITABLE_FIELDS = Object.freeze([
+  'al_id', 'author_handle', 'player_discord_id', 'player_age', 'character_name', 'submitted_at_text',
+  'eval_flags', 'status', 'reason', 'notes', 'checklist',
+]);
+
+/** Valores de uma análise nova. */
+export const AL_DEFAULTS = Object.freeze({
+  al_id: '', author_handle: '', player_discord_id: '', player_age: null, character_name: '', submitted_at_text: '',
+  eval_flags: [], reason: '', notes: '', checklist: [],
+});
+
+/**
+ * Normaliza a análise vinda do cliente: só campos editáveis, textos aparados, idade como número.
+ * Não valida (use validateAlEvaluation depois).
+ */
+export function pickAlEvaluation(data = {}) {
+  const src = data && typeof data === 'object' ? data : {};
+  const out = {};
+  for (const f of AL_EDITABLE_FIELDS) if (f in src) out[f] = structuredClone(src[f]);
+  for (const f of ['al_id', 'author_handle', 'player_discord_id', 'character_name', 'submitted_at_text']) {
+    if (f in out) out[f] = str(out[f]);
+  }
+  for (const f of ['reason', 'notes']) if (f in out) out[f] = String(out[f] ?? '').trim();
+  if ('player_age' in out) {
+    const v = out.player_age;
+    out.player_age = v === '' || v == null ? null : Number(v);
+  }
+  if (Array.isArray(out.eval_flags)) out.eval_flags = [...new Set(out.eval_flags)].sort();
+  return out;
+}
+
+/** Respostas do gabarito vindas do cliente → formato gravado (posição = ordem da lista). */
+export const pickAlAnswers = (answers = []) => answers.map((a, i) => ({
+  question_id: a?.question_id ?? null, question_text: String(a?.question_text ?? '').trim(),
+  note: String(a?.note ?? '').trim(), send_to_discord: Boolean(a?.send_to_discord), position: i + 1,
+}));
+
+/** Participantes vindos do cliente: sem o autor (já é o responsável) e sem repetidos. */
+export function pickAlParticipants(participants = [], authorId = null) {
+  const seen = new Set();
+  return participants
+    .map((p) => ({ discord_id: str(p?.discord_id), role: str(p?.role) }))
+    .filter((p) => p.discord_id !== authorId && !seen.has(p.discord_id) && seen.add(p.discord_id));
+}
+
+/** Webhook vindo do cliente (textos aparados). A url só vai se for preenchida. */
+export function pickWebhook(data = {}) {
+  const src = data && typeof data === 'object' ? data : {};
+  const out = {};
+  for (const f of ['name', 'purpose', 'channel_name', 'sender_name', 'sender_avatar_url']) if (f in src) out[f] = str(src[f]);
+  if (str(src.url)) out.url = str(src.url);
+  if ('active' in src) out.active = Boolean(src.active);
+  return out;
+}
+
+export const WEBHOOK_COLUMNS = Object.freeze([
+  'id', 'name', 'purpose', 'channel_name', 'sender_name', 'sender_avatar_url', 'active',
+  'created_by', 'created_at', 'updated_by', 'updated_at',
 ]);
 
 /** Módulos que o banco pode ter (Staff.features). */
