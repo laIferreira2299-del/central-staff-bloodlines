@@ -5,6 +5,8 @@ import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
 
 export const ALLOWED_TAGS = Object.freeze(['p', 'strong', 'em', 'code', 'pre', 'ul', 'ol', 'li', 'a', 'br', 'blockquote']);
+/** Extras do Livro de Regras: títulos de seção, linha divisória e tabelas (o resto do site não usa). */
+export const RICH_EXTRA_TAGS = Object.freeze(['h2', 'h3', 'h4', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td']);
 export const ALLOWED_ATTR = Object.freeze(['href']);
 /** Só http, https e mailto (links relativos, javascript:, data: etc. são removidos). */
 export const ALLOWED_URI = /^(?:https?:|mailto:)/i;
@@ -14,8 +16,9 @@ const marked = new Marked({ gfm: true, breaks: true, async: false });
 /**
  * Cria o renderizador para uma janela (no navegador, `window`; nos testes, a janela do jsdom).
  * @param {Window} win
+ * @param {{ rich?: boolean }} [options] rich = também títulos h2 a h4, hr e tabelas
  */
-export function createMarkdownRenderer(win) {
+export function createMarkdownRenderer(win, { rich = false } = {}) {
   const purify = DOMPurify(win);
 
   // Todo link sai com target/rel seguros; qualquer outro atributo já foi removido.
@@ -29,7 +32,7 @@ export function createMarkdownRenderer(win) {
   });
 
   const config = {
-    ALLOWED_TAGS: [...ALLOWED_TAGS],
+    ALLOWED_TAGS: [...ALLOWED_TAGS, ...(rich ? RICH_EXTRA_TAGS : [])],
     ALLOWED_ATTR: [...ALLOWED_ATTR, 'target', 'rel'],
     ALLOWED_URI_REGEXP: ALLOWED_URI,
     ALLOW_DATA_ATTR: false,
@@ -80,3 +83,7 @@ export function createMarkdownRenderer(win) {
 const browser = typeof window !== 'undefined' && window.document ? createMarkdownRenderer(window) : null;
 export const toSafeHtml = (md) => browser.toSafeHtml(md);
 export const renderMarkdownInto = (el, md) => browser.renderInto(el, md);
+
+// Versão com títulos e tabelas, só para o Livro de Regras.
+const richBrowser = browser ? createMarkdownRenderer(window, { rich: true }) : null;
+export const renderRichMarkdownInto = (el, md) => richBrowser.renderInto(el, md);

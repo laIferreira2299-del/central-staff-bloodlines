@@ -30,6 +30,8 @@ const ROUTES = [
   ['characters', /^#\/lore\/personagens$/],
   ['character', /^#\/lore\/personagens\/([0-9a-f-]{36}|novo)$/],
   ['productivity', /^#\/controle$/],
+  // Livro de Regras
+  ['rules', /^#\/regras(?:\/([0-9a-f-]{36}))?$/],
 ];
 
 /** @returns {{ name: string, slug?: string, hash: string }} */

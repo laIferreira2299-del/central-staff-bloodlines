@@ -17,6 +17,7 @@ import {
   validateBlockedName, validateCharacter, validateCharacterNote, validateChecklistItem, validateQuestion,
 } from '../core/lore.js';
 import { PRODUCTIVITY_ERRORS } from '../core/productivity.js';
+import { RULE_ERRORS, pickRule, validateRule } from '../core/rules.js';
 import {
   PROPOSAL_ERRORS, PROPOSAL_NOTE_MAX, proposalStatus, validateAnnouncement, validateEvaluation,
 } from '../core/workflow.js';
@@ -32,6 +33,7 @@ const WEBHOOK_SELECT = WEBHOOK_COLUMNS.join(', ');
 const ATTACHMENT_COLUMNS = 'id, evaluation_id, storage_path, file_name, mime, size, position, created_at';
 const PRINTS_BUCKET = 'al-prints';
 const PHOTOS_BUCKET = 'character-photos';
+const RULE_COLUMNS = 'id, title, category, content, position, created_by, created_at, updated_by, updated_at';
 const CHARACTER_COLUMNS = 'id, character_name, discord_name, discord_id, city_id, photo_path, status, version, created_by, created_at, updated_by, updated_at';
 const FUNCTION_NAME = 'enviar-discord';
 
@@ -199,6 +201,7 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     const signed = await sb.storage.from(PHOTOS_BUCKET).createSignedUrls(paths, 3600);
     return new Map((signed.data ?? []).filter((x) => x.signedUrl).map((x) => [x.path, x.signedUrl]));
   }
+  const presentRule = (r) => ({ ...r, created_by_name: nameOf(r.created_by), updated_by_name: nameOf(r.updated_by) });
   const presentCharacter = (c, urls) => ({
     ...c, photo_url: c.photo_path ? urls.get(c.photo_path) ?? null : null,
     created_by_name: nameOf(c.created_by), updated_by_name: nameOf(c.updated_by),
@@ -1107,6 +1110,47 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       const { data, error, status } = await sb.from('character_admin_notes').delete().eq('id', id).select('id');
       if (error) return failFrom(error, status);
       return data?.length ? ok(null) : fail('NOT_FOUND', 'Anotação não encontrada.');
+    },
+
+    /* ----- Livro de Regras (15_regras.sql) ----- */
+    async listRules() {
+      const { can, error: g } = await guard();
+      if (g) return g;
+      if (!can('regras.ler') && !can('regras.editar')) return fail('FORBIDDEN');
+      const { data, error, status } = await sb.from('rules').select(RULE_COLUMNS)
+        .order('category').order('position').order('title');
+      if (error) return failFrom(error, status);
+      await loadNames();
+      return ok(data.map(presentRule));
+    },
+
+    async saveRule(input = {}) {
+      const { error: g } = await guard('regras.editar');
+      if (g) return g;
+      let current = null;
+      if (input.id) {
+        const { data, error, status } = await sb.from('rules').select(RULE_COLUMNS).eq('id', input.id).maybeSingle();
+        if (error) return failFrom(error, status);
+        if (!data) return fail('NOT_FOUND', 'Regra não encontrada.');
+        current = data;
+      }
+      const next = { position: 0, ...(current ? pickRule(current) : {}), ...pickRule(input) };
+      const { valid, errors } = validateRule(next);
+      if (!valid) return validation(errors);
+      const q = current ? sb.from('rules').update(next).eq('id', current.id) : sb.from('rules').insert(next);
+      const { data, error, status } = await q.select(RULE_COLUMNS).maybeSingle();
+      if (error) return fieldFail(error, status, { [RULE_ERRORS.duplicate]: 'title' });
+      if (!data) return fail('NOT_FOUND', 'Regra não encontrada.');
+      await loadNames();
+      return ok(presentRule(data));
+    },
+
+    async deleteRule(id) {
+      const { error: g } = await guard('regras.editar');
+      if (g) return g;
+      const { data, error, status } = await sb.from('rules').delete().eq('id', id).select('id');
+      if (error) return failFrom(error, status);
+      return data?.length ? ok(null) : fail('NOT_FOUND', 'Regra não encontrada.');
     },
 
     /* ----- Etapa 10: produtividade (13_produtividade.sql) ----- */

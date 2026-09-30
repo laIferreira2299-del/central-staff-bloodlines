@@ -17,6 +17,7 @@ import {
   validateBlockedName, validateCharacter, validateCharacterNote, validateChecklistItem, validateQuestion,
 } from '../core/lore.js';
 import { PRODUCTIVITY_ERRORS, aggregateProductivity } from '../core/productivity.js';
+import { RULE_ERRORS, pickRule, sortRules, validateRule } from '../core/rules.js';
 import {
   PROPOSAL_ERRORS, contentChanged, proposalStatus, EVALUATION_ERRORS, evaluationChangeError, validateEvaluation,
   isPeriodOpen, validateAnnouncement, isAnnouncementFor, PROPOSAL_NOTE_MAX,
@@ -85,11 +86,15 @@ function allowlistState(seed, nowIso) {
     })),
     alEvaluations: [], alParticipants: [], alAnswers: [], alAttachments: [], webhooks: [],
     ...loreState(),
+    ...rulesState(),
   };
 }
 
 /** Etapa 9: personagens, histórico e anotações (vazios no começo, como o 12_lore.sql). */
 const loreState = () => ({ characters: [], characterRevisions: [], characterNotes: [] });
+
+/** Livro de Regras: vazio no começo (o conteúdo inicial vem do 16_regras_seed.sql no banco). */
+const rulesState = () => ({ rules: [] });
 
 /**
  * @param {{
@@ -128,6 +133,7 @@ export function createMockAdapter({
       // Estado salvo antes da Etapa 5: ganha os dados da Allowlist sem perder o resto.
       if (!parsed.questions) Object.assign(parsed, allowlistState(allowlistSeed, nowIso()));
       if (!parsed.characters) Object.assign(parsed, loreState());
+      if (!parsed.rules) Object.assign(parsed, rulesState());
       return parsed;
     } catch { return null; }
   }
@@ -278,6 +284,7 @@ export function createMockAdapter({
       : null;
     return { ...clone(c), photo_url, created_by_name: nameOf(c.created_by), updated_by_name: nameOf(c.updated_by) };
   }
+  const presentRule = (r) => ({ ...clone(r), created_by_name: nameOf(r.created_by), updated_by_name: nameOf(r.updated_by) });
   const presentNote = (n) => ({ ...clone(n), created_by_name: nameOf(n.created_by) });
 
   /** Cria ou edita gabarito/checklist com autoria do "servidor". */
@@ -1242,6 +1249,43 @@ export function createMockAdapter({
         const n = state.characterNotes.find((x) => x.id === id && x.created_by === staff.discord_id);
         if (!n) return fail('NOT_FOUND', 'Anotação não encontrada.');
         state.characterNotes = state.characterNotes.filter((x) => x !== n);
+        save();
+        return ok(null);
+      });
+    },
+
+    /* ----- Livro de Regras (regras.ler / regras.editar) ----- */
+    async listRules() {
+      return run('listRules', 'staff', async ({ can }) => {
+        if (!can('regras.ler') && !can('regras.editar')) return fail('FORBIDDEN');
+        return ok(sortRules(state.rules).map(presentRule));
+      });
+    },
+
+    async saveRule(input = {}) {
+      return run('saveRule', 'regras.editar', async ({ staff }) => {
+        const row = input.id ? state.rules.find((x) => x.id === input.id) : null;
+        if (input.id && !row) return fail('NOT_FOUND', 'Regra não encontrada.');
+        const next = { position: 0, ...(row ? pickRule(row) : {}), ...pickRule(input) };
+        const { valid, errors } = validateRule(next);
+        if (!valid) return validationError(errors);
+        if (state.rules.some((x) => x.id !== row?.id && x.category === next.category && x.title.toLowerCase() === next.title.toLowerCase())) {
+          return validationError({ title: RULE_ERRORS.duplicate });
+        }
+        const at = nowIso();
+        if (row) Object.assign(row, next, { updated_by: staff.discord_id, updated_at: at });
+        const saved = row ?? { id: uuid(), ...next, created_by: staff.discord_id, created_at: at, updated_by: staff.discord_id, updated_at: at };
+        if (!row) state.rules.push(saved);
+        save();
+        return ok(presentRule(saved));
+      });
+    },
+
+    async deleteRule(id) {
+      return run('deleteRule', 'regras.editar', async () => {
+        const row = state.rules.find((x) => x.id === id);
+        if (!row) return fail('NOT_FOUND', 'Regra não encontrada.');
+        state.rules = state.rules.filter((x) => x !== row);
         save();
         return ok(null);
       });

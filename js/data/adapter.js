@@ -283,6 +283,12 @@
  * @property {(characterId: string, n: { about: string, body: string }) => Result<CharacterNote>} addCharacterNote   lore.anotacoes.
  * @property {(id: string) => Result<null>} deleteCharacterNote   lore.anotacoes e só a própria (senão NOT_FOUND).
  *
+ * Livro de Regras (15_regras.sql; regras em js/core/rules.js)
+ * @property {() => Result<Rule[]>} listRules    regras.ler ou regras.editar. Ordem: categoria, ordem, título.
+ * @property {(r: object) => Result<Rule>} saveRule    regras.editar. Cria (sem id) ou edita. Título repetido na mesma
+ *           categoria = VALIDATION em errors.title (RULE_ERRORS.duplicate).
+ * @property {(id: string) => Result<null>} deleteRule    regras.editar. NOT_FOUND se não existe.
+ *
  * Etapa 10 · produtividade (13_produtividade.sql; conta em js/core/productivity.js)
  * @property {(p: { from: string, to: string }) => Result<Productivity>} getProductivity   produtividade.ver. to exclusivo.
  * @property {() => Result<Array<{ discord_id: string, display_name: string }>>} listStaffNames   Staff: nomes de toda a equipe.
@@ -316,6 +322,7 @@ export const ADAPTER_METHODS = Object.freeze([
   'sendAlToDiscord', 'testDiscordWebhook', 'sendAnnouncementToDiscord', 'listDiscordRoleIds', 'saveDiscordRoleIds',
   'saveInterviewQuestion', 'saveChecklistItem', 'saveBlockedName',
   'listCharacters', 'getCharacter', 'saveCharacter', 'setCharacterPhoto', 'addCharacterNote', 'deleteCharacterNote',
+  'listRules', 'saveRule', 'deleteRule',
   'getProductivity', 'listStaffNames',
 ]);
 
@@ -381,7 +388,7 @@ export const WEBHOOK_COLUMNS = Object.freeze([
 ]);
 
 /** Módulos que o banco pode ter (Staff.features). */
-export const FEATURES = Object.freeze(['allowlist', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos', 'discord_cargos', 'lore', 'produtividade']);
+export const FEATURES = Object.freeze(['allowlist', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos', 'discord_cargos', 'lore', 'produtividade', 'regras']);
 
 /** Campos que o cliente pode definir. Todo o resto é do servidor. */
 export const EDITABLE_FIELDS = Object.freeze([
