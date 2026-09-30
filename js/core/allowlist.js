@@ -570,6 +570,7 @@ export const DISCORD_SEND_ERRORS = Object.freeze({
   discord: (status) => `O Discord recusou o envio (HTTP ${status}). O webhook pode ter sido apagado no Discord.`,
   announcementForbidden: 'Seu cargo não permite enviar avisos.',
   announcementNotFound: 'Aviso não encontrado.',
+  outdatedFunction: 'A função enviar-discord instalada no Supabase é de uma versão antiga e ainda não envia avisos. Avise a administração para colar o arquivo novo (supabase/functions/enviar-discord/index.ts) e clicar Deploy.',
 });
 export const TEST_MESSAGE = '✓ Teste de conexão — Bloodlines RP · Central da Staff';
 

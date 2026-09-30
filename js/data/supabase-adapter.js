@@ -1143,7 +1143,10 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     async sendAnnouncementToDiscord(announcementId, { webhookId, siteUrl = '' } = {}) {
       const { error: g } = await guard('avisos.enviar');
       if (g) return g;
-      return invokeSend({ action: 'aviso', announcement_id: announcementId, webhook_id: webhookId, site_url: siteUrl });
+      const res = await invokeSend({ action: 'aviso', announcement_id: announcementId, webhook_id: webhookId, site_url: siteUrl });
+      // A função antiga (antes da Decisão 11) não conhece a ação "aviso".
+      if (res.error?.message === 'Ação desconhecida.') return fail('NETWORK', DISCORD_SEND_ERRORS.outdatedFunction);
+      return res;
     },
 
     async testDiscordWebhook(webhookId) {
