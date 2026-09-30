@@ -1580,3 +1580,67 @@ body {
 @media (max-width: 767.98px) {
   .al-interview { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Nova entrevista: coluna lateral mais baixa, para caber na janela sem rolagem */
+.al-interview { grid-template-columns: 380px minmax(0, 1fr); --al-control-h: 32px; }
+.al-interview-side {
+  top: calc(var(--topbar-h) + var(--space-2));
+  max-height: calc(100vh - var(--topbar-h) - var(--space-4));
+  gap: var(--space-2);
+  scrollbar-width: thin;
+}
+.al-interview-side .panel { padding: var(--space-3); gap: var(--space-2); }
+.al-interview-side .al-compact { padding: var(--space-3); }
+.al-interview-side .al-block { gap: 6px; }
+.al-interview-side .al-block + .al-block { margin-top: var(--space-3); padding-top: var(--space-3); }
+.al-interview-side .al-block-title { font-size: .68rem; margin: 0; }
+.al-interview-side .al-responsible { font-size: var(--fs-xs); }
+.al-interview-side .staff-form-grid { gap: 6px var(--space-2); }
+.al-interview-side .field { gap: 2px; }
+.al-interview-side .field-label { font-size: .7rem; }
+.al-interview-side .input, .al-interview-side .al-compact .input { min-height: var(--al-control-h); padding: 4px var(--space-2); font-size: var(--fs-xs); }
+.al-interview-side .al-inline .btn, .al-interview-side .al-team-add .btn, .al-interview-side .al-compact .al-inline .btn { min-height: var(--al-control-h); height: var(--al-control-h); font-size: var(--fs-xs); }
+.al-interview-side .field-hint { font-size: .7rem; line-height: 1.35; margin: 0; }
+.al-interview-side .al-flag-grid { gap: 4px var(--space-2); }
+.al-interview-side .al-flag-grid .al-flag { min-height: 28px; padding: 2px var(--space-2); font-size: var(--fs-xs); }
+.al-interview-side .al-flag-row-label { font-size: .68rem; min-width: 3em; }
+.al-interview-side .al-statuses { margin: 2px 0 0; }
+.al-interview-side .al-status { min-height: 32px; padding: 4px var(--space-2); font-size: var(--fs-xs); }
+.al-interview-side .textarea { min-height: 52px; height: 52px; font-size: var(--fs-xs); padding: 6px var(--space-2); }
+.al-interview-side .block-title { font-size: var(--fs-sm); padding-bottom: 6px; }
+.al-interview-side .al-drop { padding: var(--space-2); gap: 0; font-size: var(--fs-xs); }
+.al-interview-side .al-drop .ti { font-size: 18px; }
+.al-interview-side .al-thumbs { margin-top: 4px; }
+.al-interview-side .field-hint, .al-interview-side .al-hint { font-size: .7rem; }
+.al-interview-side .al-actions { padding: var(--space-2) 0 0; gap: 6px var(--space-2); border-top: 1px solid var(--border); }
+.al-interview-side .al-actions .btn { height: var(--al-control-h); font-size: var(--fs-xs); padding-inline: var(--space-3); }
+.al-interview-side .al-actions .al-send { flex: 1 1 100%; }
+.al-interview-side .al-send .input--sm { min-height: var(--al-control-h); font-size: var(--fs-xs); }
+.al-interview-side .al-team-add { grid-template-columns: minmax(0, 1fr) 118px auto; gap: 6px; }
+@media (max-width: 767.98px) {
+  .al-interview { grid-template-columns: minmax(0, 1fr); }
+  .al-interview-side { max-height: none; }
+}
+/* Entrevista: Autor, Discord ID e Idade na mesma linha; Data com o botão Agora na seguinte */
+.al-interview .al-compact .staff-form-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.al-interview .al-compact .field--author_handle { grid-column: span 2; }
+.al-interview .al-compact .field--player_discord_id { grid-column: span 2; }
+.al-interview .al-compact .field--player_age { grid-column: span 2; }
+.al-interview .al-compact .field--submitted_at_text { grid-column: 1 / -1; }
+.al-interview-side .al-checklist-panel .block-title,
+.al-interview-side > .panel:not(.al-compact) .block-title { border-bottom: 0; padding-bottom: 0; }
+.al-interview-side .al-drop { grid-template-columns: auto minmax(0, 1fr); justify-items: start; align-items: center; column-gap: var(--space-2); text-align: left; }
+.al-interview-side .al-drop .ti { grid-row: span 2; }
+.al-interview-side .al-block-title + .al-responsible { margin-top: -2px; }
+.al-interview-side .al-actions .al-send .field-hint { line-height: 1.25; }
+.al-interview-side .al-block + .al-block { margin-top: var(--space-2); padding-top: var(--space-2); }
+.al-interview-side .al-compact { padding: var(--space-2) var(--space-3); }
+.al-interview-side .textarea { min-height: 44px; height: 44px; }
+.al-interview-side .al-drop { padding: 6px var(--space-2); }
+.al-interview-side .al-drop .ti { display: none; }
+.al-interview-side > .panel:not(.al-compact) { padding: var(--space-2) var(--space-3); }
+.al-interview-side > .panel:not(.al-compact) .block-title { font-size: var(--fs-xs); letter-spacing: .06em; text-transform: uppercase; }
+.al-interview-side .al-actions { padding-top: 6px; }
+.al-interview-side .al-drop { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; text-align: center; padding: 8px var(--space-2); row-gap: 0; }
+.al-interview-side .al-drop > * { grid-row: auto; }
+.al-interview-side .al-drop > span { font-size: var(--fs-xs); line-height: 1.35; }
