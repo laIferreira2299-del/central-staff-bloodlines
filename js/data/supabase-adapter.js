@@ -9,7 +9,7 @@ import {
   AL_DEFAULTS, WEBHOOK_COLUMNS, pickAlAnswers, pickAlEvaluation, pickAlParticipants, pickWebhook,
 } from './adapter.js';
 import {
-  ALLOWLIST_ERRORS, DISCORD_SEND_ERRORS, MAX_PRINTS, printError, validateAlEvaluation, validateAlExtras, validateWebhook,
+  ALLOWLIST_ERRORS, DISCORD_SEND_ERRORS, MAX_PRINTS, validateDiscordRoleIds, printError, validateAlEvaluation, validateAlExtras, validateWebhook,
 } from '../core/allowlist.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
 import {
@@ -1140,13 +1140,40 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       return invokeSend({ action: 'enviar', evaluation_id: evaluationId, webhook_id: webhookId, resend: Boolean(resend) });
     },
 
-    async sendAnnouncementToDiscord(announcementId, { webhookId, siteUrl = '' } = {}) {
+    async sendAnnouncementToDiscord(announcementId, { webhookId = null, siteUrl = '', channel = true, dm = false } = {}) {
       const { error: g } = await guard('avisos.enviar');
       if (g) return g;
-      const res = await invokeSend({ action: 'aviso', announcement_id: announcementId, webhook_id: webhookId, site_url: siteUrl });
+      const res = await invokeSend({ action: 'aviso', announcement_id: announcementId, webhook_id: webhookId, site_url: siteUrl, channel, dm });
       // A função antiga (antes da Decisão 11) não conhece a ação "aviso".
       if (res.error?.message === 'Ação desconhecida.') return fail('NETWORK', DISCORD_SEND_ERRORS.outdatedFunction);
       return res;
+    },
+
+    async listDiscordRoleIds() {
+      const { can, error: g } = await guard();
+      if (g) return g;
+      if (!can('webhooks.gerenciar') && !can('avisos.enviar')) return fail('FORBIDDEN');
+      const { data, error, status } = await sb.from('discord_role_ids').select('role, discord_role_id').order('role');
+      return error ? failFrom(error, status) : ok(data);
+    },
+
+    async saveDiscordRoleIds(map = {}) {
+      const { error: g } = await guard('webhooks.gerenciar');
+      if (g) return g;
+      const { valid, errors } = validateDiscordRoleIds(map);
+      if (!valid) return fail('VALIDATION', Object.values(errors)[0], { errors });
+      const entries = Object.entries(map).map(([role, id]) => [role, String(id ?? '').trim()]);
+      const upserts = entries.filter(([, id]) => id).map(([role, discord_role_id]) => ({ role, discord_role_id }));
+      const removes = entries.filter(([, id]) => !id).map(([role]) => role);
+      if (upserts.length) {
+        const { error, status } = await sb.from('discord_role_ids').upsert(upserts, { onConflict: 'role' });
+        if (error) return failFrom(error, status);
+      }
+      if (removes.length) {
+        const { error, status } = await sb.from('discord_role_ids').delete().in('role', removes);
+        if (error) return failFrom(error, status);
+      }
+      return adapter.listDiscordRoleIds();
     },
 
     async testDiscordWebhook(webhookId) {

@@ -570,6 +570,8 @@ export const DISCORD_SEND_ERRORS = Object.freeze({
   discord: (status) => `O Discord recusou o envio (HTTP ${status}). O webhook pode ter sido apagado no Discord.`,
   announcementForbidden: 'Seu cargo não permite enviar avisos.',
   announcementNotFound: 'Aviso não encontrado.',
+  noBot: 'O bot do Discord ainda não foi configurado no Supabase (segredo DISCORD_BOT_TOKEN). Avise a administração.',
+  nothingToSend: 'Escolha enviar no canal, no privado ou nos dois.',
   outdatedFunction: 'A função enviar-discord instalada no Supabase é de uma versão antiga e ainda não envia avisos. Avise a administração para colar o arquivo novo (supabase/functions/enviar-discord/index.ts) e clicar Deploy.',
 });
 export const TEST_MESSAGE = '✓ Teste de conexão — Bloodlines RP · Central da Staff';
@@ -601,14 +603,8 @@ export const ANNOUNCEMENT_DISCORD = Object.freeze({
 const SITE_URL = /^https:\/\/[^\s#?]{1,300}$/;
 const discordTime = (iso) => `<t:${Math.floor(new Date(iso).getTime() / 1000)}:f>`;
 
-/**
- * Mensagem do webhook para um aviso: um card com título, texto (o Discord entende o mesmo
- * Markdown simples do site), prioridade, público e datas. Sem menções (ninguém é marcado).
- * @param {{ id: string, title: string, body?: string, priority: string, audience_roles?: string[],
- *   starts_at?: string, ends_at?: string|null, requires_ack?: boolean }} a
- * @param {{ senderName?: string, sender?: { name?: string, avatarUrl?: string }, siteUrl?: string, now?: Date|string }} [opts]
- */
-export function buildAnnouncementMessage(a, { senderName = '', sender = {}, siteUrl = '', now = new Date() } = {}) {
+/** Card do aviso (canal e privado usam o mesmo). */
+function announcementEmbed(a, { senderName = '', siteUrl = '', now = new Date() } = {}) {
   const { priorities, colors, roles } = ANNOUNCEMENT_DISCORD;
   const audience = a.audience_roles ?? [];
   const at = new Date(now);
@@ -622,7 +618,7 @@ export function buildAnnouncementMessage(a, { senderName = '', sender = {}, site
   if (a.ends_at) fields.push({ name: '◷ Válido até', value: discordTime(a.ends_at), inline: true });
   if (a.requires_ack) fields.push({ name: '✓ Confirmação', value: 'Abra o aviso na Central da Staff e clique em **Li e entendi**.', inline: false });
   const site = clean(siteUrl);
-  const embed = {
+  return {
     title: `${prefix}${clean(a.title)}`.slice(0, 256),
     ...(clean(a.body) ? { description: clean(a.body).slice(0, 4096) } : {}),
     ...(SITE_URL.test(site) ? { url: `${site}#/avisos#aviso-${encodeURIComponent(a.id)}` } : {}),
@@ -631,13 +627,70 @@ export function buildAnnouncementMessage(a, { senderName = '', sender = {}, site
     timestamp: at.toISOString(),
     footer: { text: 'Bloodlines RP · Avisos da Staff' },
   };
+}
+
+/**
+ * IDs de cargo do Discord a marcar: os do público do aviso ("Toda a equipe" = todos os
+ * cadastrados), sem repetir e só os válidos.
+ * @param {string[]} audienceRoles @param {Array<{ role: string, discord_role_id: string }>} roleIds
+ */
+export function announcementMentions(audienceRoles = [], roleIds = []) {
+  const ids = roleIds.filter((r) => !audienceRoles.length || audienceRoles.includes(r.role))
+    .map((r) => clean(r.discord_role_id)).filter((id) => DISCORD_ID.test(id));
+  return [...new Set(ids)];
+}
+
+/**
+ * Quem recebe no privado (decisão de 30/09): membros ativos da staff com o cargo do público;
+ * "Toda a equipe" = todos os ativos. Pelo cargo cadastrado no site, não pelo do servidor.
+ * @param {string[]} audienceRoles @param {Array<{ discord_id: string, display_name?: string, role: string, active?: boolean }>} staff
+ */
+export const announcementRecipients = (audienceRoles = [], staff = []) => staff
+  .filter((s) => s.active !== false && DISCORD_ID.test(s.discord_id ?? '') && (!audienceRoles.length || audienceRoles.includes(s.role)));
+
+/**
+ * Mensagem do webhook para um aviso: um card com título, texto (o Discord entende o mesmo
+ * Markdown simples do site), prioridade, público e datas. Marca só os cargos de mentionRoleIds.
+ * @param {{ id: string, title: string, body?: string, priority: string, audience_roles?: string[],
+ *   starts_at?: string, ends_at?: string|null, requires_ack?: boolean }} a
+ * @param {{ senderName?: string, sender?: { name?: string, avatarUrl?: string }, siteUrl?: string,
+ *   now?: Date|string, mentionRoleIds?: string[] }} [opts]
+ */
+export function buildAnnouncementMessage(a, { sender = {}, mentionRoleIds = [], ...opts } = {}) {
+  const ids = mentionRoleIds.filter((id) => DISCORD_ID.test(id));
   return {
     username: clean(sender.name) || 'Bloodlines RP · Avisos',
     ...(clean(sender.avatarUrl) ? { avatar_url: clean(sender.avatarUrl) } : {}),
-    allowed_mentions: { parse: [] },
-    embeds: [embed],
+    ...(ids.length ? { content: ids.map((id) => `<@&${id}>`).join(' ') } : {}),
+    allowed_mentions: ids.length ? { parse: [], roles: ids } : { parse: [] },
+    embeds: [announcementEmbed(a, opts)],
     files: [],
   };
+}
+
+/** Mensagem do bot no privado: o mesmo card, sem marcar ninguém. */
+export const buildAnnouncementDm = (a, opts = {}) => ({
+  content: 'Novo aviso da Central da Staff:',
+  allowed_mentions: { parse: [] },
+  embeds: [announcementEmbed(a, opts)],
+});
+
+/** Resumo do envio no privado para a tela. */
+export function dmSummary({ sent = 0, failed = [] } = {}) {
+  const total = sent + failed.length;
+  if (!total) return 'Ninguém da staff tem esse cargo: nada foi enviado no privado.';
+  return `Privado: ${sent} de ${total} receberam.${failed.length ? ` Não receberam: ${failed.join(', ')}.` : ''}`;
+}
+
+export const DISCORD_ROLE_ID_ERROR = 'ID do cargo: só números, de 17 a 20 dígitos.';
+/** Valida { cargo: id } (vazio = sem marcação para aquele cargo). */
+export function validateDiscordRoleIds(map = {}) {
+  const errors = {};
+  for (const [role, id] of Object.entries(map)) {
+    if (!(role in ANNOUNCEMENT_DISCORD.roles)) errors[role] = 'Cargo desconhecido.';
+    else if (clean(id) && !DISCORD_ID.test(clean(id))) errors[role] = DISCORD_ROLE_ID_ERROR;
+  }
+  return { valid: Object.keys(errors).length === 0, errors };
 }
 
 /* ======================= Validação (mesmas regras dos CHECKs do 10) ======================= */

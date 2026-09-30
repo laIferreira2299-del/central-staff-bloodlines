@@ -8,7 +8,7 @@ import {
   AL_DEFAULTS, WEBHOOK_COLUMNS, pickAlAnswers, pickAlEvaluation, pickAlParticipants, pickWebhook,
 } from './adapter.js';
 import {
-  ALLOWLIST_ERRORS, DISCORD_SEND_ERRORS, MAX_PRINTS, normalizeName, printError, sentStatus, validateAlEvaluation,
+  ALLOWLIST_ERRORS, DISCORD_SEND_ERRORS, MAX_PRINTS, announcementRecipients, validateDiscordRoleIds, normalizeName, printError, sentStatus, validateAlEvaluation,
   validateAlExtras, validateWebhook,
 } from '../core/allowlist.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
@@ -1280,12 +1280,44 @@ export function createMockAdapter({
       });
     },
 
-    async sendAnnouncementToDiscord(announcementId, { webhookId } = {}) {
+    async sendAnnouncementToDiscord(announcementId, { webhookId, channel = true, dm = false } = {}) {
       return run('sendAnnouncementToDiscord', 'avisos.enviar', async () => {
-        if (!state.announcements.some((a) => a.id === announcementId)) return fail('NOT_FOUND', DISCORD_SEND_ERRORS.announcementNotFound);
+        if (!channel && !dm) return validationError({ _: DISCORD_SEND_ERRORS.nothingToSend });
+        const a = state.announcements.find((x) => x.id === announcementId);
+        if (!a) return fail('NOT_FOUND', DISCORD_SEND_ERRORS.announcementNotFound);
         const w = state.webhooks.find((x) => x.id === webhookId);
-        if (!w || !w.active || w.purpose !== 'avisos') return validationError({ _: DISCORD_SEND_ERRORS.webhook });
-        return ok({ sent_at: nowIso(), discord_status: sentStatus(w.name) });
+        if (channel && (!w || !w.active || w.purpose !== 'avisos')) return validationError({ _: DISCORD_SEND_ERRORS.webhook });
+        // Simulado: todos recebem no privado (o de verdade é a Edge Function com o bot).
+        const recipients = announcementRecipients(a.audience_roles, state.staff);
+        return ok({ sent_at: nowIso(), discord_status: channel ? sentStatus(w.name) : '', dm: dm ? { sent: recipients.length, failed: [] } : null });
+      });
+    },
+
+    async listDiscordRoleIds() {
+      return run('listDiscordRoleIds', 'staff', async ({ can }) => (can('webhooks.gerenciar') || can('avisos.enviar')
+        ? ok((state.discordRoleIds ?? []).map((r) => ({ role: r.role, discord_role_id: r.discord_role_id })))
+        : fail('FORBIDDEN')));
+    },
+
+    async saveDiscordRoleIds(map = {}) {
+      return run('saveDiscordRoleIds', 'webhooks.gerenciar', async ({ staff }) => {
+        const { valid, errors } = validateDiscordRoleIds(map);
+        if (!valid) return validationError(errors);
+        const rows = new Map((state.discordRoleIds ?? []).map((r) => [r.role, r]));
+        for (const [role, raw] of Object.entries(map)) {
+          const id = String(raw ?? '').trim();
+          const before = rows.get(role);
+          if (!id) {
+            if (before) { rows.delete(role); audit(staff, 'cargo_discord', role, 'removido', { discord_role_id: before.discord_role_id }, null); }
+            continue;
+          }
+          if (before?.discord_role_id === id) continue;
+          rows.set(role, { role, discord_role_id: id, updated_by: staff.discord_id, updated_at: nowIso() });
+          audit(staff, 'cargo_discord', role, before ? 'alterado' : 'cadastrado', before ? { discord_role_id: before.discord_role_id } : null, { discord_role_id: id });
+        }
+        state.discordRoleIds = [...rows.values()];
+        save();
+        return ok(state.discordRoleIds.map((r) => ({ role: r.role, discord_role_id: r.discord_role_id })));
       });
     },
 

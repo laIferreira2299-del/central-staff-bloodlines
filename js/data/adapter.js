@@ -257,9 +257,13 @@
  *           finalidade do tipo (senão VALIDATION webhook). Já enviada sem resend = VALIDATION alreadySent.
  *           O Discord recusou = VALIDATION com DISCORD_SEND_ERRORS.discord(status). Mensagens em errors._.
  * @property {(webhookId: string) => Result<null>} testDiscordWebhook   webhooks.gerenciar. Posta TEST_MESSAGE.
- * @property {(announcementId: string, o: { webhookId: string, siteUrl?: string }) => Result<{ sent_at: string, discord_status: string }>} sendAnnouncementToDiscord
- *           avisos.enviar (senão FORBIDDEN). Aviso inexistente = NOT_FOUND.
- *           Webhook ativo de finalidade avisos (senão VALIDATION webhook). Pode enviar quantas vezes quiser.
+ * @property {(announcementId: string, o: { webhookId?: string, siteUrl?: string, channel?: boolean, dm?: boolean }) => Result<{ sent_at: string, discord_status: string, dm: { sent: number, failed: string[] }|null }>} sendAnnouncementToDiscord
+ *           avisos.enviar (senão FORBIDDEN). Aviso inexistente = NOT_FOUND. channel (padrão true): webhook ativo de
+ *           finalidade avisos (senão VALIDATION webhook), marcando os cargos de listDiscordRoleIds. dm: privado de cada
+ *           membro ativo do público, pelo bot (sem bot = VALIDATION noBot). Nenhum dos dois = VALIDATION nothingToSend.
+ * @property {() => Result<Array<{ role: string, discord_role_id: string }>>} listDiscordRoleIds   webhooks.gerenciar ou avisos.enviar.
+ * @property {(map: Record<string, string>) => Result<Array<{ role: string, discord_role_id: string }>>} saveDiscordRoleIds
+ *           webhooks.gerenciar. { cargo: id }; vazio remove. VALIDATION por cargo (DISCORD_ROLE_ID_ERROR).
  *
  * Etapa 8 · gabarito, checklist e nomes proibidos (lore.gerenciar; regras em js/core/lore.js)
  * @property {(q: object) => Result<InterviewQuestion>} saveInterviewQuestion   Cria (sem id) ou edita. VALIDATION por campo.
@@ -309,7 +313,7 @@ export const ADAPTER_METHODS = Object.freeze([
   'listInterviewQuestions', 'listChecklistItems', 'listBlockedNames',
   'listAlEvaluations', 'getAlEvaluation', 'saveAlEvaluation', 'addAlPrint', 'removeAlPrint', 'getAlPrintUrls',
   'listDiscordWebhooks', 'saveDiscordWebhook', 'deleteDiscordWebhook',
-  'sendAlToDiscord', 'testDiscordWebhook', 'sendAnnouncementToDiscord',
+  'sendAlToDiscord', 'testDiscordWebhook', 'sendAnnouncementToDiscord', 'listDiscordRoleIds', 'saveDiscordRoleIds',
   'saveInterviewQuestion', 'saveChecklistItem', 'saveBlockedName',
   'listCharacters', 'getCharacter', 'saveCharacter', 'setCharacterPhoto', 'addCharacterNote', 'deleteCharacterNote',
   'getProductivity', 'listStaffNames',
@@ -377,7 +381,7 @@ export const WEBHOOK_COLUMNS = Object.freeze([
 ]);
 
 /** Módulos que o banco pode ter (Staff.features). */
-export const FEATURES = Object.freeze(['allowlist', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos', 'lore', 'produtividade']);
+export const FEATURES = Object.freeze(['allowlist', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos', 'discord_cargos', 'lore', 'produtividade']);
 
 /** Campos que o cliente pode definir. Todo o resto é do servidor. */
 export const EDITABLE_FIELDS = Object.freeze([

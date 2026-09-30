@@ -4,9 +4,11 @@
 // Importante = faixa no topo até abrir; urgente = janela ao entrar (app.js).
 // Decisão 11: quem cria pode também postar no Discord (webhook de finalidade Avisos, pela Edge
 // Function enviar-discord). Opcional no formulário e botão "Enviar no Discord" em cada aviso.
+// Item 1b do 03 (30/09): o canal marca os cargos cadastrados (SQL 14) e, se pedido, o bot manda
+// no privado de cada membro ativo do público.
 import { h, icon, toast } from '../dom.js';
 import { confirmDialog, openDialog } from '../modal.js';
-import { DISCORD_SEND_ERRORS } from '../../core/allowlist.js';
+import { DISCORD_SEND_ERRORS, dmSummary } from '../../core/allowlist.js';
 import { formatDate, roleBadge } from '../components.js';
 import { ROLE_CODES, roleLabel } from '../../core/permissions.js';
 import { ANNOUNCEMENT_LIMITS, PRIORITIES, isAnnouncementFor, priorityLabel, validateAnnouncement } from '../../core/workflow.js';
@@ -14,6 +16,8 @@ import { renderMarkdownInto } from '../../core/render-md.js';
 import { toLocalInput } from './evaluations.js';
 import { renderMessage } from './message.js';
 
+const MENTION_HINT = 'Marca o cargo do público se o ID dele estiver cadastrado em Webhooks do Discord › Cargos no Discord.';
+const DM_HINT = 'O bot manda a mesma mensagem no privado de cada membro ativo do público (pelo cargo no site). Quem fechou a DM não recebe.';
 const PRIORITY_CLASS = { normal: 'badge--status', importante: 'badge--revisar', urgente: 'badge--urgent' };
 const fromLocalInput = (v) => (v ? new Date(v).toISOString() : null);
 
@@ -57,6 +61,7 @@ export function renderAnnouncements(app) {
     const endIn = h('input', { class: 'input', id: 'ann-end', type: 'datetime-local', value: a?.ends_at ? toLocalInput(a.ends_at) : '' });
     const ackIn = h('input', { type: 'checkbox', id: 'ann-ack', checked: a?.requires_ack ?? false });
     const discordIn = h('input', { type: 'checkbox', id: 'ann-discord', disabled: !hooks?.length });
+    const dmIn = h('input', { type: 'checkbox', id: 'ann-dm' });
     const hookSel = hookSelect('ann-discord-webhook');
     // div em volta: .filter tem display próprio e ignoraria o hidden.
     const hookPick = h('div', { hidden: true },
@@ -81,11 +86,13 @@ export function renderAnnouncements(app) {
         h('div', { class: 'check-row' }, roleBoxes)),
       h('label', { class: 'check' }, ackIn, 'Exigir "Li e entendi"'),
       h('div', { class: 'field' },
-        h('label', { class: 'check' }, discordIn, a ? 'Enviar esta versão também no Discord' : 'Enviar também no Discord'),
+        h('label', { class: 'check' }, discordIn, a ? 'Enviar esta versão no canal do Discord' : 'Enviar no canal do Discord'),
         hookPick,
         h('p', { class: 'field-hint', id: 'ann-discord-hint' }, hooks == null ? 'Carregando canais…'
           : !hooks.length ? DISCORD_SEND_ERRORS.noWebhook
-            : hooks.length === 1 ? `Canal: ${hookName(hooks[0])}. Ninguém é marcado (sem @).` : 'Ninguém é marcado (sem @).')),
+            : `${hooks.length === 1 ? `Canal: ${hookName(hooks[0])}. ` : ''}${MENTION_HINT}`),
+        h('label', { class: 'check' }, dmIn, 'Enviar no privado (DM) de cada um'),
+        h('p', { class: 'field-hint', id: 'ann-dm-hint' }, DM_HINT)),
       errorEl,
       h('div', { class: 'panel-actions' },
         h('button', { type: 'submit', class: 'btn btn--primary', id: 'ann-save', 'data-requires-online': '' }, icon('send'), a ? 'Salvar aviso' : 'Publicar aviso'),
@@ -115,7 +122,9 @@ export function renderAnnouncements(app) {
       if (!alive) return;
       if (res.error) { if (res.error.code === 'VALIDATION') show(res.error.details?.errors ?? { _: res.error.message }); else app.reportError(res.error); return; }
       toast(a ? 'Aviso salvo.' : 'Aviso publicado.');
-      if (discordIn.checked) await sendToDiscord(res.data.id, hookSel.value || hooks[0]?.id);
+      if (discordIn.checked || dmIn.checked) {
+        await sendToDiscord(res.data.id, { channel: discordIn.checked, dm: dmIn.checked, webhookId: hookSel.value || hooks?.[0]?.id });
+      }
       if (!alive) return;
       editing = null;
       renderForm();
@@ -138,28 +147,41 @@ export function renderAnnouncements(app) {
   const siteUrl = () => `${location.origin}${location.pathname}`;
 
   /** Envia e mostra o resultado. O aviso já está salvo: uma falha aqui não desfaz nada. */
-  async function sendToDiscord(id, webhookId) {
-    const res = await app.adapter.sendAnnouncementToDiscord(id, { webhookId, siteUrl: siteUrl() });
+  async function sendToDiscord(id, { channel, dm, webhookId }) {
+    const res = await app.adapter.sendAnnouncementToDiscord(id, { webhookId, channel, dm, siteUrl: siteUrl() });
+    const ok = (label) => [{ label, value: true, variant: 'primary', autofocus: true }];
     if (res.error) {
-      openDialog({ title: '✗ Não foi enviado ao Discord', body: res.error.details?.errors?._ ?? res.error.message ?? 'Tente de novo.',
-        actions: [{ label: 'Entendi', value: true, variant: 'primary', autofocus: true }] });
+      openDialog({ title: '✗ Não foi enviado ao Discord', body: res.error.details?.errors?._ ?? res.error.message ?? 'Tente de novo.', actions: ok('Entendi') });
       return false;
     }
-    toast(`✓ Enviado para o Discord (${res.data.discord_status.replace(/^enviado para /, '')}).`);
+    const parts = [channel && `Canal: ${res.data.discord_status.replace(/^enviado para /, '')}.`, res.data.dm && dmSummary(res.data.dm)].filter(Boolean);
+    // Alguém ficou sem receber: janela, não só aviso no canto.
+    if (res.data.dm?.failed?.length) {
+      openDialog({ title: '⚠ Enviado, mas nem todos receberam no privado',
+        body: `${parts.join(' ')} Quem não recebeu está com a DM fechada para o bot ou fora do servidor.`, actions: ok('Entendi') });
+    } else toast(`✓ Enviado. ${parts.join(' ')}`, 5000);
     return true;
   }
 
-  /** Botão do cartão: confirma (e escolhe o canal, se houver mais de um) antes de enviar. */
+  /** Botão do cartão: escolhe canal e/ou privado (e o canal, se houver mais de um) antes de enviar. */
   async function askAndSend(a) {
     const sel = hookSelect(`ann-send-${a.id}`);
-    const body = hooks.length > 1
-      ? h('div', {}, h('p', {}, `Enviar "${a.title}" para qual canal?`), sel)
-      : `Enviar "${a.title}" para ${hookName(hooks[0])}? Ninguém é marcado (sem @).`;
-    const ok = await openDialog({ title: 'Enviar no Discord?', body, actions: [
+    const chIn = h('input', { type: 'checkbox', id: `ann-send-ch-${a.id}`, checked: hooks.length > 0, disabled: !hooks.length });
+    const dmIn = h('input', { type: 'checkbox', id: `ann-send-dm-${a.id}` });
+    const body = h('div', {},
+      h('p', {}, `Enviar "${a.title}":`),
+      h('label', { class: 'check' }, chIn, hooks.length === 1 ? `No canal ${hookName(hooks[0])}` : 'No canal do Discord'),
+      hooks.length > 1 && sel,
+      h('p', { class: 'field-hint' }, hooks.length ? MENTION_HINT : DISCORD_SEND_ERRORS.noWebhook),
+      h('label', { class: 'check' }, dmIn, 'No privado (DM) de cada um'),
+      h('p', { class: 'field-hint' }, DM_HINT));
+    const go = await openDialog({ title: 'Enviar no Discord?', body, actions: [
       { label: 'Cancelar', value: false, variant: 'ghost' },
       { label: 'Enviar', value: true, variant: 'primary', autofocus: true },
     ] });
-    if (ok) await sendToDiscord(a.id, sel.value || hooks[0].id);
+    if (!go) return;
+    if (!chIn.checked && !dmIn.checked) { toast(DISCORD_SEND_ERRORS.nothingToSend, 4000); return; }
+    await sendToDiscord(a.id, { channel: chIn.checked, dm: dmIn.checked, webhookId: sel.value || hooks[0]?.id });
   }
 
   /* ---------- lista ---------- */
@@ -202,7 +224,7 @@ export function renderAnnouncements(app) {
         forMe && a.my_read_at && a.requires_ack && !a.my_acknowledged_at && h('button', { type: 'button', class: 'btn btn--sm btn--primary', 'data-requires-online': '', onclick: async () => { if (await app.readAnnouncement(a.id, { ack: true })) load(); } }, icon('check'), 'Li e entendi'),
         forMe && a.my_read_at && h('span', { class: 'staff-meta' }, `✓ Lido em ${formatDate(a.my_read_at, { time: true })}${a.my_acknowledged_at ? ' · Li e entendi' : ''}`),
         sender && reportBtn,
-        sender && hooks?.length > 0 && h('button', { type: 'button', class: 'btn btn--sm', 'data-requires-online': '', onclick: () => askAndSend(a) }, icon('brand-discord'), 'Enviar no Discord'),
+        sender && hooks != null && h('button', { type: 'button', class: 'btn btn--sm', 'data-requires-online': '', onclick: () => askAndSend(a) }, icon('brand-discord'), 'Enviar no Discord'),
         sender && h('button', { type: 'button', class: 'btn btn--sm btn--ghost', 'data-requires-online': '', onclick: () => { editing = a; renderForm(); formHost.querySelector('#ann-title')?.focus(); } }, icon('pencil'), 'Editar'),
         sender && h('button', { type: 'button', class: 'btn btn--sm btn--danger', 'data-requires-online': '', 'aria-label': `Apagar ${a.title}`, onclick: async () => {
           const ok = await confirmDialog({ title: `Apagar "${a.title}"?`, message: 'O aviso some para todos, junto com o registro de leitura.', confirmLabel: 'Apagar', danger: true });

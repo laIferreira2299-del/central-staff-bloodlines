@@ -8,7 +8,7 @@ import { renderMessage } from './message.js';
 export const AUDIT_ENTITIES = Object.freeze([
   ['membro', 'Equipe'], ['permissao', 'Permissões'], ['proposta', 'Aprovação de procedimentos'],
   ['procedimento', 'Arquivamentos'], ['avaliacao', 'Avaliações'], ['periodo', 'Períodos de avaliação'], ['aviso', 'Avisos'],
-  ['webhook', 'Webhooks'], ['nome_proibido', 'Nomes proibidos'], ['pergunta', 'Gabarito'], ['personagem', 'Personagens'],
+  ['webhook', 'Webhooks'], ['cargo_discord', 'Cargos no Discord'], ['nome_proibido', 'Nomes proibidos'], ['pergunta', 'Gabarito'], ['personagem', 'Personagens'],
 ]);
 const PAGE = 100;
 
@@ -41,6 +41,7 @@ export function describeAudit(e, name) {
     case 'periodo': return `${e.action === 'aberto' ? 'Abriu' : 'Alterou'} o período "${a.title ?? ''}" (${formatDate(a.starts_at, { time: true })} até ${formatDate(a.ends_at, { time: true })})`;
     case 'aviso': return `${e.action === 'criado' ? 'Publicou' : 'Apagou'} o aviso "${a.title ?? b.title ?? ''}"`;
     case 'webhook': return `Webhook "${a.name ?? b.name ?? ''}" ${e.action}`;
+    case 'cargo_discord': return `ID do cargo ${roleLabel(e.entity_id)} no Discord ${e.action}${a.discord_role_id ? ` (${a.discord_role_id})` : ''}`;
     case 'nome_proibido': return `Nome proibido "${a.name ?? b.name ?? ''}" ${e.action}`;
     case 'pergunta': return `Pergunta do gabarito ${e.action}: "${a.question ?? b.question ?? ''}"`;
     case 'personagem': return `Personagem "${a.character_name ?? b.character_name ?? ''}" ${e.action}`;

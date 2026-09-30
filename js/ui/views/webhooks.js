@@ -1,10 +1,12 @@
 // Etapa 7 · webhooks do Discord pela Direção (documento 02, seção 13.4): #/configuracoes/webhooks.
 // A url só entra (campo de senha); nunca aparece na tela nem volta do banco. Testar posta uma
 // mensagem simples pelo servidor (Edge Function enviar-discord).
+// Item 1b do 03 (30/09): IDs dos cargos no Discord, para os avisos marcarem o cargo (SQL 14).
 import { h, icon, toast } from '../dom.js';
 import { confirmDialog, openDialog } from '../modal.js';
 import { formatDate, statusBadge } from '../components.js';
-import { AL_LIMITS, WEBHOOK_PURPOSES } from '../../core/allowlist.js';
+import { AL_LIMITS, WEBHOOK_PURPOSES, validateDiscordRoleIds } from '../../core/allowlist.js';
+import { ROLE_CODES, roleLabel } from '../../core/permissions.js';
 import { errorText } from './allowlist.js';
 import { renderMessage } from './message.js';
 
@@ -20,6 +22,7 @@ export function renderWebhooks(app) {
   const names = new Map();
   const list = h('ul', { class: 'staff-list', id: 'wh-list' }, h('li', { class: 'staff-empty' }, 'Carregando…'));
   const formSlot = h('div', {});
+  const rolesSlot = h('div', {});
   app.els.main.replaceChildren(h('div', { class: 'main-inner webhooks-page' },
     h('a', { class: 'back', href: '#/painel' }, icon('arrow-left'), 'Painel da staff'),
     h('header', { class: 'page-head' },
@@ -27,7 +30,8 @@ export function renderWebhooks(app) {
       h('p', { class: 'page-sub' }, 'Canais para onde a Central envia os resultados de allowlist e entrevistas. O endereço do webhook fica guardado no banco e nunca aparece na tela.'),
       h('div', { class: 'page-head-actions' }, h('button', { type: 'button', class: 'btn btn--primary', id: 'wh-new', onclick: () => openForm(null) }, icon('plus'), 'Novo webhook'))),
     formSlot,
-    h('section', { class: 'panel', 'aria-labelledby': 'wh-list-title' }, h('h2', { class: 'block-title', id: 'wh-list-title' }, icon('webhook'), 'Cadastrados'), list)));
+    h('section', { class: 'panel', 'aria-labelledby': 'wh-list-title' }, h('h2', { class: 'block-title', id: 'wh-list-title' }, icon('webhook'), 'Cadastrados'), list),
+    rolesSlot));
 
   async function load() {
     const [hooks, staff] = await Promise.all([
@@ -126,6 +130,46 @@ export function renderWebhooks(app) {
     form.querySelector('#wh-name').focus();
   }
 
+  /* ---------- IDs dos cargos no Discord (só depois do SQL 14) ---------- */
+  async function loadRoles() {
+    if (!app.feature('discord_cargos')) return;
+    const res = await app.adapter.listDiscordRoleIds();
+    if (!alive) return;
+    if (res.error) { app.reportError(res.error, 'Não foi possível carregar os cargos do Discord.'); return; }
+    const current = Object.fromEntries(res.data.map((r) => [r.role, r.discord_role_id]));
+    const rows = ROLE_CODES.map((role) => h('div', { class: 'field' },
+      h('label', { class: 'field-label', for: `dr-${role}` }, roleLabel(role)),
+      h('input', { class: 'input', id: `dr-${role}`, inputmode: 'numeric', maxlength: 20, placeholder: 'só números', value: current[role] ?? '' }),
+      h('p', { class: 'field-error', id: `dr-err-${role}`, hidden: true })));
+    const form = h('form', { class: 'panel staff-form', id: 'dr-form', novalidate: true, 'aria-labelledby': 'dr-title' },
+      h('h2', { class: 'block-title', id: 'dr-title' }, icon('at'), 'Cargos no Discord'),
+      h('p', { class: 'panel-text' }, 'Com o ID cadastrado, o aviso enviado no canal marca o cargo do público (Toda a equipe marca todos). Vazio = não marca aquele cargo.'),
+      h('p', { class: 'field-hint' }, 'No Discord (com o Modo Desenvolvedor ligado): Configurações do servidor › Cargos › botão direito no cargo › Copiar ID do cargo. Se a marcação não notificar, ligue no cargo a opção "Permitir que qualquer pessoa @mencione este cargo".'),
+      h('div', { class: 'staff-form-grid' }, rows),
+      h('div', { class: 'panel-actions' },
+        h('button', { type: 'submit', class: 'btn btn--primary', id: 'dr-save', 'data-requires-online': '' }, icon('device-floppy'), 'Salvar cargos')));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const map = Object.fromEntries(ROLE_CODES.map((role) => [role, form.querySelector(`#dr-${role}`).value.trim()]));
+      for (const el of form.querySelectorAll('[id^="dr-err-"]')) el.hidden = true;
+      const shown = (errors) => {
+        for (const [role, msg] of Object.entries(errors)) {
+          const el = form.querySelector(`#dr-err-${role}`);
+          if (el) { el.textContent = msg; el.hidden = false; }
+        }
+        form.querySelector('.field-error:not([hidden])')?.previousElementSibling?.focus();
+      };
+      const { valid, errors } = validateDiscordRoleIds(map);
+      if (!valid) { shown(errors); return; }
+      const saved = await app.adapter.saveDiscordRoleIds(map);
+      if (saved.error) { if (saved.error.details?.errors) shown(saved.error.details.errors); else app.reportError(saved.error); return; }
+      toast('✓ Cargos do Discord salvos.');
+    });
+    rolesSlot.replaceChildren(form);
+    app.applyOnline();
+  }
+
   load();
+  loadRoles();
   return () => { alive = false; };
 }
