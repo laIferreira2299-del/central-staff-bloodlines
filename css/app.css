@@ -1345,3 +1345,109 @@ input[type="file"].input::file-selector-button {
 .md pre { border-left: 3px solid var(--accent); }
 .md blockquote { border-left: 3px solid var(--accent); background: var(--accent-bg); padding: .75rem 1rem; }
 .md table th { background: var(--surface-2); }
+
+/* ---------- Acabamento: profundidade, ritmo e detalhes (somente visual) ---------- */
+body {
+  background:
+    radial-gradient(900px 420px at 50% -120px, var(--glow-soft), transparent 70%) no-repeat,
+    var(--bg);
+}
+
+/* Topo translúcido com fio vermelho */
+.topbar {
+  background: var(--topbar-bg);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  border-bottom-color: var(--border);
+  box-shadow: 0 1px 0 var(--accent-border), 0 8px 24px var(--glow-soft);
+}
+.brand-mark { filter: drop-shadow(0 0 6px var(--glow)); }
+
+/* Fundo da barra lateral em toda a altura da página */
+.layout { background: linear-gradient(90deg, var(--surface-1) var(--sidebar-w), transparent var(--sidebar-w)); }
+.sidebar-title { display: flex; align-items: center; gap: var(--space-2); }
+.sidebar-title::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--border), transparent); }
+.cat-item { transition: background .18s ease, color .18s ease, border-color .18s ease, padding-left .18s ease; }
+.cat-item:hover { padding-left: calc(var(--space-3) + 2px); }
+
+/* Títulos com ornamento */
+.page-title { letter-spacing: .01em; }
+.page-head { padding-bottom: var(--space-4); border-bottom: 1px solid var(--border); position: relative; }
+.page-head::after {
+  content: ""; position: absolute; left: 0; bottom: -1px; width: 64px; height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+}
+.section-title { border-bottom-color: var(--border); }
+
+/* Cards: linha de luz e leve elevação */
+.card { position: relative; overflow: hidden; }
+.card::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent 70%);
+  opacity: 0; transition: opacity .2s ease;
+}
+.card:hover { transform: translateY(-2px); background: var(--surface-1); }
+.card:hover::before { opacity: 1; }
+.card-title { transition: color .15s ease; }
+.card:hover .card-title { color: var(--accent-text); }
+.hub-card { transition: all .2s ease; }
+.hub-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-1); }
+
+/* Painéis */
+.fieldset, .staff-row, .ann-card { box-shadow: var(--shadow-1); }
+.staff-row { transition: border-color .15s ease, background .15s ease; }
+.staff-row:hover { border-color: var(--border-emph); }
+
+/* Botões */
+.btn { box-shadow: 0 1px 0 var(--glow-soft); }
+.btn:hover { border-color: var(--accent-border); }
+.btn--primary { background: linear-gradient(180deg, var(--accent-hover), var(--accent)); }
+.btn--primary:hover { background: linear-gradient(180deg, var(--accent-hover), var(--accent-hover)); box-shadow: 0 6px 20px var(--glow); transform: translateY(-1px); }
+.btn--primary:active { transform: none; }
+.btn--danger:hover { border-color: var(--danger-border); }
+
+/* Campos */
+.input { transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+.input:hover { background: var(--surface-2); }
+.input:focus-visible { background: var(--surface-2); }
+
+/* Selos */
+.badge { box-shadow: 0 0 0 1px var(--glow-soft); }
+
+/* Tela de entrada */
+.auth-card { box-shadow: 0 20px 60px var(--glow), 0 0 0 1px var(--glow-soft); border-color: var(--border-emph); position: relative; overflow: hidden; }
+.auth-card::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+}
+.auth-mark { filter: drop-shadow(0 0 14px var(--glow)); }
+.auth-name { letter-spacing: .2em; }
+
+/* Janelas e avisos */
+.dialog { box-shadow: 0 20px 60px var(--backdrop), 0 0 0 1px var(--glow-soft); }
+.toast { box-shadow: 0 8px 24px var(--backdrop); }
+.banner { border-radius: var(--radius); }
+
+/* Leitura */
+.md h1, .md h2, .md h3 { letter-spacing: .01em; }
+.md table { border-collapse: collapse; }
+
+/* Movimento reduzido */
+@media (prefers-reduced-motion: reduce) {
+  .card, .card::before, .hub-card, .btn, .cat-item { transition: none; }
+  .card:hover, .hub-card:hover, .btn--primary:hover, .cat-item:hover { transform: none; padding-left: var(--space-3); }
+}
+
+/* Selos de público dos procedimentos (Suporte, Moderação, Ambos): uma só cor, a da identidade */
+.badge--suporte, .badge--moderador {
+  background: var(--accent-bg); border-color: var(--accent-border);
+}
+.badge--suporte .badge-dot, .badge--moderador .badge-dot,
+.badge-dot--blue, .badge-dot--pink { background: var(--accent-text); }
+.badge--ambos {
+  background: var(--accent-bg); border-color: var(--accent-border);
+}
+
+/* No celular a barra lateral vira faixa de categorias: sem o fundo em coluna */
+@media (max-width: 899.98px) {
+  .layout { background: none; }
+}
