@@ -1280,6 +1280,15 @@ export function createMockAdapter({
       });
     },
 
+    async sendAnnouncementToDiscord(announcementId, { webhookId } = {}) {
+      return run('sendAnnouncementToDiscord', 'avisos.enviar', async () => {
+        if (!state.announcements.some((a) => a.id === announcementId)) return fail('NOT_FOUND', DISCORD_SEND_ERRORS.announcementNotFound);
+        const w = state.webhooks.find((x) => x.id === webhookId);
+        if (!w || !w.active || w.purpose !== 'avisos') return validationError({ _: DISCORD_SEND_ERRORS.webhook });
+        return ok({ sent_at: nowIso(), discord_status: sentStatus(w.name) });
+      });
+    },
+
     async testDiscordWebhook(webhookId) {
       return run('testDiscordWebhook', 'webhooks.gerenciar', async () => (
         state.webhooks.some((w) => w.id === webhookId) ? ok(null) : fail('NOT_FOUND', 'Webhook não encontrado.')));

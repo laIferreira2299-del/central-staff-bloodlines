@@ -568,6 +568,8 @@ export const DISCORD_SEND_ERRORS = Object.freeze({
   missingFunction: 'A função de envio ainda não foi instalada no Supabase. Avise a administração.',
   unreachable: 'Não foi possível falar com a função de envio (enviar-discord). Confira se ela está instalada no Supabase com esse nome exato; se estiver, tente de novo.',
   discord: (status) => `O Discord recusou o envio (HTTP ${status}). O webhook pode ter sido apagado no Discord.`,
+  announcementForbidden: 'Seu cargo não permite enviar avisos.',
+  announcementNotFound: 'Aviso não encontrado.',
 });
 export const TEST_MESSAGE = '✓ Teste de conexão — Bloodlines RP · Central da Staff';
 
@@ -582,6 +584,59 @@ export const sentStatus = (webhookName, extra = '') => `enviado para ${clean(web
 export function discordPayload(message) {
   const { files = [], ...rest } = message;
   return files.length ? { ...rest, attachments: files.map((filename, id) => ({ id, filename })) } : rest;
+}
+
+/* ======================= Avisos no Discord (Decisão 11 do documento 01) ======================= */
+/** Rótulos e cores por prioridade. Rótulos iguais a PRIORITIES (workflow.js) e cargos iguais a
+ *  permissions.js (tests/unit/allowlist-rules.test.mjs confere): a Edge Function não importa aqueles arquivos. */
+export const ANNOUNCEMENT_DISCORD = Object.freeze({
+  priorities: Object.freeze({ normal: 'Normal', importante: 'Importante', urgente: 'Urgente' }),
+  colors: Object.freeze({ normal: 0x5B8DEF, importante: 0xE0A43A, urgente: 0xC8365A }),
+  roles: Object.freeze({
+    allowlist: 'Allowlist', lore: 'Lore', suporte: 'Suporte', moderador: 'Moderador',
+    head_staff: 'Head Staff', admin: 'Administrador', manager: 'Manager', ceo: 'CEO',
+  }),
+});
+const SITE_URL = /^https:\/\/[^\s#?]{1,300}$/;
+const discordTime = (iso) => `<t:${Math.floor(new Date(iso).getTime() / 1000)}:f>`;
+
+/**
+ * Mensagem do webhook para um aviso: um card com título, texto (o Discord entende o mesmo
+ * Markdown simples do site), prioridade, público e datas. Sem menções (ninguém é marcado).
+ * @param {{ id: string, title: string, body?: string, priority: string, audience_roles?: string[],
+ *   starts_at?: string, ends_at?: string|null, requires_ack?: boolean }} a
+ * @param {{ senderName?: string, sender?: { name?: string, avatarUrl?: string }, siteUrl?: string, now?: Date|string }} [opts]
+ */
+export function buildAnnouncementMessage(a, { senderName = '', sender = {}, siteUrl = '', now = new Date() } = {}) {
+  const { priorities, colors, roles } = ANNOUNCEMENT_DISCORD;
+  const audience = a.audience_roles ?? [];
+  const at = new Date(now);
+  const prefix = a.priority === 'urgente' ? `${WARN} ` : a.priority === 'importante' ? '● ' : '';
+  const fields = [
+    { name: '◈ Prioridade', value: priorities[a.priority] ?? priorities.normal, inline: true },
+    { name: '⏣ Para', value: audience.length ? audience.map((r) => roles[r] ?? r).join(', ') : 'Toda a equipe', inline: true },
+    { name: '✎ Enviado por', value: orEmpty(senderName), inline: true },
+  ];
+  if (a.starts_at && new Date(a.starts_at) > at) fields.push({ name: '◷ Começa em', value: discordTime(a.starts_at), inline: true });
+  if (a.ends_at) fields.push({ name: '◷ Válido até', value: discordTime(a.ends_at), inline: true });
+  if (a.requires_ack) fields.push({ name: '✓ Confirmação', value: 'Abra o aviso na Central da Staff e clique em **Li e entendi**.', inline: false });
+  const site = clean(siteUrl);
+  const embed = {
+    title: `${prefix}${clean(a.title)}`.slice(0, 256),
+    ...(clean(a.body) ? { description: clean(a.body).slice(0, 4096) } : {}),
+    ...(SITE_URL.test(site) ? { url: `${site}#/avisos#aviso-${encodeURIComponent(a.id)}` } : {}),
+    color: colors[a.priority] ?? colors.normal,
+    fields,
+    timestamp: at.toISOString(),
+    footer: { text: 'Bloodlines RP · Avisos da Staff' },
+  };
+  return {
+    username: clean(sender.name) || 'Bloodlines RP · Avisos',
+    ...(clean(sender.avatarUrl) ? { avatar_url: clean(sender.avatarUrl) } : {}),
+    allowed_mentions: { parse: [] },
+    embeds: [embed],
+    files: [],
+  };
 }
 
 /* ======================= Validação (mesmas regras dos CHECKs do 10) ======================= */

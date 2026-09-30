@@ -257,6 +257,9 @@
  *           finalidade do tipo (senão VALIDATION webhook). Já enviada sem resend = VALIDATION alreadySent.
  *           O Discord recusou = VALIDATION com DISCORD_SEND_ERRORS.discord(status). Mensagens em errors._.
  * @property {(webhookId: string) => Result<null>} testDiscordWebhook   webhooks.gerenciar. Posta TEST_MESSAGE.
+ * @property {(announcementId: string, o: { webhookId: string, siteUrl?: string }) => Result<{ sent_at: string, discord_status: string }>} sendAnnouncementToDiscord
+ *           avisos.enviar (senão FORBIDDEN). Aviso inexistente = NOT_FOUND.
+ *           Webhook ativo de finalidade avisos (senão VALIDATION webhook). Pode enviar quantas vezes quiser.
  *
  * Etapa 8 · gabarito, checklist e nomes proibidos (lore.gerenciar; regras em js/core/lore.js)
  * @property {(q: object) => Result<InterviewQuestion>} saveInterviewQuestion   Cria (sem id) ou edita. VALIDATION por campo.
@@ -306,7 +309,7 @@ export const ADAPTER_METHODS = Object.freeze([
   'listInterviewQuestions', 'listChecklistItems', 'listBlockedNames',
   'listAlEvaluations', 'getAlEvaluation', 'saveAlEvaluation', 'addAlPrint', 'removeAlPrint', 'getAlPrintUrls',
   'listDiscordWebhooks', 'saveDiscordWebhook', 'deleteDiscordWebhook',
-  'sendAlToDiscord', 'testDiscordWebhook',
+  'sendAlToDiscord', 'testDiscordWebhook', 'sendAnnouncementToDiscord',
   'saveInterviewQuestion', 'saveChecklistItem', 'saveBlockedName',
   'listCharacters', 'getCharacter', 'saveCharacter', 'setCharacterPhoto', 'addCharacterNote', 'deleteCharacterNote',
   'getProductivity', 'listStaffNames',

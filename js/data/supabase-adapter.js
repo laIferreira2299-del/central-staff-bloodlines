@@ -1140,6 +1140,12 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       return invokeSend({ action: 'enviar', evaluation_id: evaluationId, webhook_id: webhookId, resend: Boolean(resend) });
     },
 
+    async sendAnnouncementToDiscord(announcementId, { webhookId, siteUrl = '' } = {}) {
+      const { error: g } = await guard('avisos.enviar');
+      if (g) return g;
+      return invokeSend({ action: 'aviso', announcement_id: announcementId, webhook_id: webhookId, site_url: siteUrl });
+    },
+
     async testDiscordWebhook(webhookId) {
       const { error: g } = await guard('webhooks.gerenciar');
       if (g) return g;
