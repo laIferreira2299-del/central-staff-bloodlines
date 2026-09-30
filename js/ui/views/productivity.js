@@ -20,21 +20,27 @@ const dayLabel = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
 /** Barras por dia (allowlists e entrevistas lado a lado). */
 function dailyChart(series) {
   const max = Math.max(1, ...series.map((d) => Math.max(d.allowlists, d.entrevistas)));
-  const W = 24;
+  const n = Math.max(series.length, 1);
+  const W = Math.max(24, Math.round(720 / n));
   const H = 120;
-  const width = Math.max(series.length * W, W);
+  const bw = Math.min(14, Math.round(W * 0.3));
+  const gap = 2;
+  const width = n * W;
   const bars = series.flatMap((d, i) => ['allowlists', 'entrevistas'].map((k, j) => {
     const v = d[k];
     const bh = v ? Math.max(2, Math.round((v / max) * H)) : 0;
-    return svg('rect', { x: i * W + 3 + j * 9, y: H - bh, width: 8, height: bh, rx: 1, class: `bar bar--${k}` },
+    return svg('rect', { x: i * W + Math.round((W - 2 * bw - gap) / 2) + j * (bw + gap), y: H - bh, width: bw, height: bh, rx: 1, class: `bar bar--${k}` },
       svg('title', {}, `${dayLabel(d.day)}: ${v} ${k === 'allowlists' ? 'allowlists' : 'entrevistas'}`));
   }));
+  // As datas ficam fora do SVG (em HTML), para o texto não esticar quando o gráfico muda de largura.
   const step = Math.ceil(series.length / 10);
-  const labels = series.map((d, i) => (i % step === 0 ? svg('text', { x: i * W + W / 2, y: H + 14, 'text-anchor': 'middle', class: 'bar-label' }, dayLabel(d.day)) : null)).filter(Boolean);
-  const total = series.reduce((n, d) => n + d.allowlists + d.entrevistas, 0);
+  const labels = series.map((d, i) => (i % step === 0
+    ? h('span', { class: 'bar-label', style: `left:${(((i + 0.5) / n) * 100).toFixed(3)}%` }, dayLabel(d.day)) : null)).filter(Boolean);
+  const total = series.reduce((n2, d) => n2 + d.allowlists + d.entrevistas, 0);
   return h('figure', { class: 'prod-chart' },
-    svg('svg', { viewBox: `0 0 ${width} ${H + 18}`, role: 'img', 'aria-label': `Atividade por dia: ${total} registros em ${series.length} dias`, preserveAspectRatio: 'none' },
-      svg('line', { x1: 0, y1: H, x2: width, y2: H, class: 'bar-axis' }), ...bars, ...labels),
+    svg('svg', { viewBox: `0 0 ${width} ${H}`, role: 'img', 'aria-label': `Atividade por dia: ${total} registros em ${series.length} dias`, preserveAspectRatio: 'none' },
+      svg('line', { x1: 0, y1: H, x2: width, y2: H, class: 'bar-axis' }), ...bars),
+    h('div', { class: 'prod-axis', 'aria-hidden': 'true' }, labels),
     h('figcaption', { class: 'prod-legend' },
       h('span', { class: 'legend-dot legend-dot--allowlists' }), 'Allowlists ', h('span', { class: 'legend-dot legend-dot--entrevistas' }), 'Entrevistas'));
 }
