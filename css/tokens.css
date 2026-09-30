@@ -5,17 +5,22 @@
    (verificado por tests/unit/contrast.test.mjs).
    ========================================================================== */
 :root {
-  --bg: #0B0A10;       --surface-1: #121019;  --surface-2: #18151F;  --surface-3: #201C2A;
-  --text: #EEEAF3;     --text-2: #A79FB5;     --text-3: #6F6780;
-  --border: rgba(238,234,243,.08);  --border-2: rgba(238,234,243,.16);
+  --bg: #0a0a0a;       --surface-1: #111111;  --surface-2: #1a1a1a;  --surface-3: #222222;
+  --text: #f0f0f0;     --text-2: #999999;     --text-3: #555555;
+  --border: #2a2a2a;   --border-2: #3a2a2a;   --border-emph: #3a1a1a;
 
+  /* Identidade: vermelho sangue. Acento geral da interface. */
+  --accent: #8b0000;   --accent-hover: #a00000;  --accent-dark: #6b0000;  --accent-text: #e66a6a;  --on-accent: #ffffff;
+  --accent-bg: rgba(139,0,0,.15);  --accent-border: rgba(139,0,0,.3);
+
+  /* Cargos: Suporte segue azul; Moderação passou de rosa para vermelho claro. */
   --blue: #4F8DF5;     --blue-bg: rgba(79,141,245,.12);   --blue-border: rgba(79,141,245,.35);   /* Suporte */
-  --pink: #E0529C;     --pink-bg: rgba(224,82,156,.12);   --pink-border: rgba(224,82,156,.35);   /* Moderação */
+  --pink: #e66a6a;     --pink-bg: rgba(139,0,0,.15);      --pink-border: rgba(139,0,0,.3);        /* Moderação */
 
-  --ok: #3DAA6A;  --warn: #E08A2F;  --danger: #D6455D;
+  --ok: #3DAA6A;  --warn: #E08A2F;  --danger: #d44636;
 
   --radius-sm: 6px;  --radius: 10px;  --radius-lg: 14px;
-  --font-title: 'Cinzel', serif;  --font-body: 'Inter', system-ui, sans-serif;
+  --font-title: Georgia, 'Times New Roman', serif;  --font-body: 'Inter', system-ui, sans-serif;
 }
 
 /* ==========================================================================
@@ -24,9 +29,9 @@
    ========================================================================== */
 :root {
   --warn-bg: rgba(224,138,47,.12);    --warn-border: rgba(224,138,47,.35);
-  --danger-bg: rgba(214,69,93,.12);   --danger-border: rgba(214,69,93,.35);
+  --danger-bg: rgba(192,57,43,.14);   --danger-border: rgba(192,57,43,.4);
   --ok-bg: rgba(61,170,106,.12);      --ok-border: rgba(61,170,106,.35);
-  --neutral-bg: rgba(238,234,243,.06);
+  --neutral-bg: rgba(240,240,240,.06);
 
   --space-1: 4px;  --space-2: 8px;  --space-3: 12px;  --space-4: 16px;  --space-5: 20px;
   --space-6: 24px; --space-8: 32px; --space-10: 40px; --space-12: 48px;
@@ -37,9 +42,9 @@
 
   --topbar-h: 64px;  --sidebar-w: 256px;  --content-max: 1040px;  --reading-max: 800px;
 
-  --shadow-1: 0 1px 2px rgba(0,0,0,.45);
-  --shadow-2: 0 12px 32px rgba(0,0,0,.5);
-  --backdrop: rgba(11,10,16,.72);
+  --shadow-1: 0 4px 20px rgba(139,0,0,.15);
+  --shadow-2: 0 8px 32px rgba(139,0,0,.25);
+  --backdrop: rgba(0,0,0,.75);
 
   --dur: 140ms;  --ease: cubic-bezier(.2,.7,.2,1);
 }
