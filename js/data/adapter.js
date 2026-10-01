@@ -336,6 +336,9 @@
  *           Edge Function (ação 'area'). 'canal': o bot posta no canal (canal_id ou o da área); 'dm': privado de cada membro ativo (user_ids vazio = a equipe toda);
  *           'alinhamento': canal marcando as pessoas, com a call. Só membros ativos da área; área arquivada recusa; DM fechada vira falha sem parar o lote.
  *           Grava o transcrito (areas_comunicacoes) e o registro (areas_historico).
+ * @property {(areaId?: string, o?: { limit?: number, offset?: number }) => Result<{ items: object[], total: number }>} listAreaMessages
+ *           areas.gerenciar. Transcrito das mensagens enviadas ao Discord (areas_comunicacoes), mais recentes primeiro; areaId vazio = todas as áreas.
+ *           Item: { id, area_id, area_nome, tipo, canal_id, conteudo, destinatarios, enviado_por, enviado_por_nome, criado_em }.
  * @property {(f?: { areaId?: string, actorId?: string, acao?: string, from?: string, to?: string, limit?: number, offset?: number }) => Result<{ items: object[], total: number }>} listAllAreaHistory
  *           Histórico de todas as áreas (inclusive das apagadas). `from` e `to` são datas AAAA-MM-DD (`to` inclusivo, horário de Brasília).
  *

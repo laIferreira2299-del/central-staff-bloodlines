@@ -1679,6 +1679,13 @@ export function createMockAdapter({
       });
     },
 
+    async listAreaMessages(areaId = '', { limit = 20, offset = 0 } = {}) {
+      return run('listAreaMessages', 'areas.gerenciar', async () => {
+        const all = [...(state.areaComms ?? [])].reverse().filter((c) => !areaId || c.area_id === areaId).sort((a, b) => (a.criado_em < b.criado_em ? 1 : a.criado_em > b.criado_em ? -1 : 0));
+        return ok({ items: all.slice(offset, offset + limit).map((c) => ({ ...clone(c), enviado_por_nome: nameOf(c.enviado_por) })), total: all.length });
+      });
+    },
+
     /* Simula a ação 'area' da Edge Function: mesmas travas, nada vai ao Discord de verdade; grava o transcrito e o histórico. */
     async sendAreaMessage(areaId, { tipo, conteudo, canal_id = '', user_ids = [], mencionar_cargo = false, link_call = '' } = {}) {
       return run('sendAreaMessage', 'areas.gerenciar', async ({ staff }) => {

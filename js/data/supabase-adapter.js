@@ -44,6 +44,7 @@ const MEETING_COLUMNS = '*, meeting_participants (kind, value)';
 const AREA_COLUMNS = 'id, nome, slug, descricao, icone, cor, nivel_minimo, status, discord_role_id, discord_canal_id, ordem, criado_por, criado_em, atualizado_em';
 const AREA_PROCEDURE_COLUMNS = 'id, area_id, titulo, conteudo, status, tags, criado_por, criado_em, atualizado_por, atualizado_em';
 const AREA_TAG_COLUMNS = 'id, area_id, nome, cor, discord_role_id';
+const AREA_MESSAGE_COLUMNS = 'id, area_id, area_nome, tipo, canal_id, conteudo, destinatarios, enviado_por, criado_em';
 const AREA_HISTORY_COLUMNS = 'id, area_id, area_nome, acao, entidade, entidade_id, ator_id, detalhes, criado_em';
 const RULE_COLUMNS = 'id, title, category, content, position, created_by, created_at, updated_by, updated_at';
 const CHARACTER_COLUMNS = 'id, character_name, discord_name, discord_id, city_id, photo_path, status, version, created_by, created_at, updated_by, updated_at';
@@ -1496,6 +1497,17 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       if (error) return failFrom(error, status);
       await loadNames();
       return ok({ items: data.map((e) => ({ ...e, ator_nome: nameOf(e.ator_id) })), total: count ?? data.length });
+    },
+
+    async listAreaMessages(areaId = '', { limit = 20, offset = 0 } = {}) {
+      const { error: g } = await guard('areas.gerenciar');
+      if (g) return g;
+      let q = sb.from('areas_comunicacoes').select(AREA_MESSAGE_COLUMNS, { count: 'exact' });
+      if (areaId) q = q.eq('area_id', areaId);
+      const { data, error, status, count } = await q.order('criado_em', { ascending: false }).range(offset, offset + limit - 1);
+      if (error) return failFrom(error, status);
+      await loadNames();
+      return ok({ items: data.map((c) => ({ ...c, enviado_por_nome: nameOf(c.enviado_por) })), total: count ?? data.length });
     },
 
     /* ----- Áreas: mensagens no Discord pela Edge Function (ação 'area'; plano 07, Fase 4) ----- */

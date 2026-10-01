@@ -7,7 +7,7 @@ import {
   AREA_MANAGE_ERRORS, AREA_ROLES, AREA_ROLE_LABELS, DEFAULT_AREA_COLOR, DEFAULT_TAG_COLOR, areaSlug, confirmsAreaName, describeAreaEvent,
   levelLabel, levelOptions, moveInOrder,
 } from '../../core/areas.js';
-import { AREA_MESSAGE_MAX } from '../../core/allowlist.js';
+import { AREA_DISCORD_ERRORS, AREA_MESSAGE_MAX, areaSendSummary, validateAreaMessage } from '../../core/allowlist.js';
 import { ROLE_LABELS, ROLE_LIST } from '../../core/permissions.js';
 import { formField, showFieldErrors } from './gabarito.js';
 import { colored, errorText, safeColor, safeIcon, unavailable } from './areas.js';
@@ -35,7 +35,7 @@ export function renderAreasAdmin(app) {
   const ctx = {
     tab: 'areas', areas: [], staff: [], areaId: '', editingArea: null, editingTag: null,
     hist: { areaId: '', actorId: '', acao: '', from: '', to: '', page: 0 },
-    msg: { tipo: 'canal', picked: new Set(), canal: null, texto: '', cargo: false, call: '' },
+    msg: { view: 'enviar', tipo: 'canal', picked: new Set(), canal: null, texto: '', cargo: false, call: '', result: null, sentArea: '', page: 0 },
   };
   const panel = h('div', { class: 'areas-panel', id: 'aa-panel' });
   const tabs = h('div', { class: 'areas-tabs', role: 'tablist', 'aria-label': 'Seções da gestão' });
@@ -349,28 +349,43 @@ export function renderAreasAdmin(app) {
   }
 
   /* ------------------------------------------------------------------ Comunicação */
-  // Fase 3: só a interface (o envio ao Discord é ligado na Fase 5, com a janela de confirmação e o transcrito).
-  async function drawCommunication() {
-    if (!ctx.areas.length) { panel.replaceChildren(noAreas()); return; }
+  // Fase 5: envio pela Edge Function (ação 'area'), com janela de confirmação, resultado por pessoa e o transcrito das mensagens enviadas.
+  const COMM_VIEWS = Object.freeze([['enviar', 'Enviar mensagem'], ['enviadas', 'Mensagens enviadas']]);
+  const TYPE_LABELS = Object.freeze({ canal: 'Canal', dm: 'Privado', alinhamento: 'Alinhamento' });
+
+  function drawCommunication() {
+    const views = h('div', { class: 'areas-subtabs', role: 'group', 'aria-label': 'Comunicação' },
+      COMM_VIEWS.map(([key, label]) => h('button', {
+        type: 'button', class: 'btn areas-subtab', id: `aa-m-view-${key}`, 'aria-pressed': String(ctx.msg.view === key),
+        onclick: () => { ctx.msg.view = key; ctx.msg.page = 0; drawPanel(); },
+      }, label)));
+    if (ctx.msg.view === 'enviadas') return drawSentMessages(views);
+    return drawComposer(views);
+  }
+
+  async function drawComposer(views) {
+    if (!ctx.areas.length) { panel.replaceChildren(views, noAreas()); return; }
     const token = drawToken;
-    panel.replaceChildren(areaPicker(() => { ctx.msg.picked.clear(); ctx.msg.canal = null; drawPanel(); }), h('p', { class: 'panel-text' }, 'Carregando…'));
+    const clear = () => { ctx.msg.picked.clear(); ctx.msg.canal = null; ctx.msg.result = null; };
+    panel.replaceChildren(views, areaPicker(() => { clear(); drawPanel(); }), h('p', { class: 'panel-text' }, 'Carregando…'));
     const team = await app.adapter.listAreaTeam(ctx.areaId);
     if (!alive || token !== drawToken || failed(team, 'Não foi possível carregar a equipe da área.')) return;
     const area = selectedArea();
     const m = ctx.msg;
+    const archived = area.status !== 'ativa';
     const usesChannel = m.tipo === 'canal' || m.tipo === 'alinhamento';
     const usesPeople = m.tipo === 'dm_pessoas' || m.tipo === 'alinhamento';
     const counter = h('p', { class: 'field-hint', id: 'aa-m-count', 'aria-live': 'polite' });
     const paint = () => { counter.textContent = `${m.texto.length} de ${AREA_MESSAGE_MAX} caracteres`; };
     const text = h('textarea', { class: 'input textarea', id: 'aa-m-texto', rows: 6, maxlength: AREA_MESSAGE_MAX, oninput: (e) => { m.texto = e.target.value; paint(); } }, m.texto);
     paint();
-    const typeField = formField('aa-m-tipo', 'Tipo de envio', h('select', { class: 'input', onchange: (e) => { m.tipo = e.target.value; drawPanel(); } }, options(MESSAGE_TYPES, m.tipo)));
+    const typeField = formField('aa-m-tipo', 'Tipo de envio', h('select', { class: 'input', onchange: (e) => { m.tipo = e.target.value; m.result = null; drawPanel(); } }, options(MESSAGE_TYPES, m.tipo)));
     const channelField = usesChannel && formField('aa-m-canal', 'ID do canal', h('input', {
       class: 'input', type: 'text', inputmode: 'numeric', maxlength: 20, value: m.canal ?? area.discord_canal_id ?? '',
       oninput: (e) => { m.canal = e.target.value; },
     }), 'Vem preenchido com o canal padrão da área; pode trocar para este envio.');
     const people = usesPeople && h('fieldset', { class: 'areas-tagbox', id: 'aa-m-people' },
-      h('legend', { class: 'field-label' }, m.tipo === 'dm_pessoas' ? 'Destinatários' : 'Quem chamar (nenhum marcado = a equipe toda)'),
+      h('legend', { class: 'field-label' }, m.tipo === 'dm_pessoas' ? 'Destinatários *' : 'Quem chamar (nenhum marcado = a equipe toda)'),
       team.data.length ? team.data.map((p) => h('label', { class: 'areas-tagpick' },
         h('input', { type: 'checkbox', checked: m.picked.has(p.discord_id), onchange: (e) => { if (e.target.checked) m.picked.add(p.discord_id); else m.picked.delete(p.discord_id); } }),
         ' ', p.display_name)) : h('span', { class: 'panel-text' }, 'Esta área não tem membros.'));
@@ -380,14 +395,111 @@ export function renderAreasAdmin(app) {
     const callField = m.tipo === 'alinhamento' && formField('aa-m-call', 'Link da call (opcional)', h('input', {
       class: 'input', type: 'url', maxlength: 300, value: m.call, placeholder: 'https://discord.gg/...', oninput: (e) => { m.call = e.target.value; },
     }), 'Só links discord.gg ou discord.com/channels.');
-    panel.replaceChildren(
-      areaPicker(() => { m.picked.clear(); m.canal = null; drawPanel(); }),
-      h('form', { class: 'areas-editor', id: 'aa-compose', novalidate: true, onsubmit: (e) => e.preventDefault() },
-        typeField.el, channelField && channelField.el, people,
-        h('div', { class: 'field' }, h('label', { class: 'field-label', for: 'aa-m-texto' }, 'Mensagem *'), text, counter),
-        roleBox, callField && callField.el,
-        h('p', { class: 'panel-text areas-readonly', id: 'aa-m-note' }, 'O envio ao Discord ainda não está ligado nesta tela: a função já está pronta e o botão será ativado na próxima etapa.'),
-        h('div', { class: 'areas-editor-actions' }, h('button', { type: 'submit', class: 'btn btn--primary', id: 'aa-m-send', disabled: true }, icon('send'), 'Enviar'))));
+    const general = h('p', { class: 'field-error', id: 'aa-m-error', role: 'alert', hidden: true });
+    const sendBtn = h('button', { type: 'submit', class: 'btn btn--primary', id: 'aa-m-send', disabled: archived }, icon('send'), 'Enviar');
+    const peopleError = h('p', { class: 'field-error', id: 'aa-m-people-err', hidden: true });
+    // Mesmo formato do showFieldErrors: chave do erro -> campo com `.error`.
+    const fields = {
+      conteudo: formField('aa-m-texto-x', '', h('span')),
+      canal_id: channelField || { error: h('p', { hidden: true }) },
+      link_call: callField || { error: h('p', { hidden: true }) },
+      user_ids: { error: peopleError },
+    };
+
+    const request = () => ({
+      tipo: m.tipo === 'dm_equipe' || m.tipo === 'dm_pessoas' ? 'dm' : m.tipo,
+      conteudo: m.texto.trim(),
+      canal_id: usesChannel ? String(m.canal ?? area.discord_canal_id ?? '').trim() : '',
+      user_ids: usesPeople ? [...m.picked] : [],
+      mencionar_cargo: usesChannel && m.cargo && Boolean(area.discord_role_id),
+      link_call: m.tipo === 'alinhamento' ? m.call.trim() : '',
+    });
+    const peopleNames = (ids) => ids.map((id) => team.data.find((p) => p.discord_id === id)?.display_name ?? id);
+
+    async function submit(e) {
+      e.preventDefault();
+      if (sendBtn.disabled) return;
+      showFieldErrors(fields, general, null);
+      const req = request();
+      const local = validateAreaMessage({ kind: req.tipo, conteudo: req.conteudo, canal_id: req.canal_id, user_ids: req.user_ids, link_call: req.link_call });
+      if (!local.valid) { showFieldErrors(fields, general, { details: { errors: local.errors } }); return; }
+      if (m.tipo === 'dm_pessoas' && !req.user_ids.length) { peopleError.textContent = AREA_DISCORD_ERRORS.noRecipients; peopleError.hidden = false; return; }
+      const everyone = req.tipo !== 'canal' && !req.user_ids.length;
+      const channel = `no canal ${req.canal_id || area.discord_canal_id || '(sem canal)'}`;
+      const target = req.tipo === 'canal' ? channel
+        : req.tipo === 'dm' ? (everyone ? `no privado da equipe toda de ${area.nome}` : `no privado de ${req.user_ids.length} ${req.user_ids.length === 1 ? 'pessoa' : 'pessoas'}`)
+          : `${channel}, chamando ${everyone ? 'a equipe toda' : peopleNames(req.user_ids).join(', ')}`;
+      const yes = await openDialog({
+        title: 'Enviar esta mensagem?',
+        body: h('div', { class: 'areas-confirm', id: 'aa-m-confirm' },
+          h('p', {}, `A mensagem será enviada ${target}${req.mencionar_cargo ? ', marcando o cargo da área' : ''}.`),
+          h('pre', { class: 'areas-preview' }, req.conteudo),
+          req.link_call && h('p', { class: 'areas-card-desc' }, `Link da call: ${req.link_call}`)),
+        actions: [{ label: 'Voltar', value: false, variant: 'ghost', autofocus: true }, { label: 'Enviar', value: true, variant: 'primary' }],
+      });
+      if (!yes || !alive || token !== drawToken || sendBtn.disabled) return;
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Enviando…';
+      const res = await app.adapter.sendAreaMessage(area.id, req);
+      if (!alive || token !== drawToken) return;
+      if (res.error) {
+        sendBtn.disabled = false;
+        sendBtn.replaceChildren(icon('send'), 'Enviar');
+        showFieldErrors(fields, general, res.error);
+        return;
+      }
+      m.texto = '';
+      m.result = res.data;
+      m.picked.clear();
+      toast(areaSendSummary(res.data), 3500);
+      drawPanel();
+    }
+
+    const result = m.result && h('section', { class: 'areas-result', id: 'aa-m-result', 'aria-live': 'polite' },
+      h('p', {}, h('strong', {}, areaSendSummary(m.result))),
+      m.result.registrado === false && h('p', { class: 'areas-readonly' }, 'A mensagem foi enviada, mas não foi possível registrar no histórico.'),
+      m.result.detalhes?.some((d) => d.status !== 'ok') && h('ul', { class: 'areas-result-fails', id: 'aa-m-fails' },
+        m.result.detalhes.filter((d) => d.status !== 'ok').map((d) => h('li', {}, `${d.nome}: ${d.erro || 'falhou'}`))));
+    panel.replaceChildren(...[
+      views,
+      areaPicker(() => { clear(); drawPanel(); }),
+      archived && h('p', { class: 'panel-text areas-readonly', id: 'aa-m-note' }, 'Esta área está arquivada: reative para enviar mensagens.'),
+      result,
+      h('form', { class: 'areas-editor', id: 'aa-compose', novalidate: true, onsubmit: submit },
+        typeField.el, channelField && channelField.el, people, peopleError,
+        h('div', { class: 'field' }, h('label', { class: 'field-label', for: 'aa-m-texto' }, 'Mensagem *'), text, counter, fields.conteudo.error),
+        roleBox, callField && callField.el, general,
+        h('div', { class: 'areas-editor-actions' }, sendBtn)),
+    ].filter(Boolean));
+  }
+
+  async function drawSentMessages(views) {
+    const token = drawToken;
+    const m = ctx.msg;
+    const filter = h('div', { class: 'areas-picker' },
+      h('label', { class: 'field-label', for: 'aa-s-area' }, 'Área'),
+      h('select', { class: 'input', id: 'aa-s-area', onchange: (e) => { m.sentArea = e.target.value; m.page = 0; drawPanel(); } },
+        options([['', 'Todas as áreas'], ...ctx.areas.map((a) => [a.id, a.nome])], m.sentArea)));
+    panel.replaceChildren(views, filter, h('p', { class: 'panel-text' }, 'Carregando…'));
+    const res = await app.adapter.listAreaMessages(m.sentArea, { limit: HISTORY_PAGE, offset: m.page * HISTORY_PAGE });
+    if (!alive || token !== drawToken || failed(res, 'Não foi possível carregar as mensagens enviadas.')) return;
+    const { items, total } = res.data;
+    const pages = Math.max(1, Math.ceil(total / HISTORY_PAGE));
+    const who = (d) => h('li', { class: d.status === 'ok' ? 'areas-dest areas-dest--ok' : 'areas-dest areas-dest--fail' },
+      d.status === 'ok' ? '✓ ' : '✗ ', d.nome ?? d.discord_id, d.erro ? ` (${d.erro})` : '');
+    panel.replaceChildren(views, filter,
+      items.length
+        ? h('ul', { class: 'areas-history', id: 'aa-sent' }, items.map((c) => h('li', { class: 'areas-history-row', 'data-tipo': c.tipo },
+          h('p', {}, h('strong', {}, c.enviado_por_nome ?? 'Sistema'), ` · ${TYPE_LABELS[c.tipo] ?? c.tipo}`, c.area_nome ? ` · ${c.area_nome}` : ''),
+          h('p', { class: 'areas-card-desc' }, formatDate(c.criado_em, { time: true }), c.canal_id ? ` · canal ${c.canal_id}` : ''),
+          h('p', { class: 'areas-message-text' }, c.conteudo),
+          c.destinatarios?.length ? h('details', { class: 'areas-diff' }, h('summary', {}, `Destinatários (${c.destinatarios.length})`),
+            h('ul', { class: 'areas-dests' }, c.destinatarios.map(who))) : null)))
+        : h('p', { class: 'panel-text areas-empty' }, 'Nenhuma mensagem enviada ainda.'),
+      h('div', { class: 'areas-pager' },
+        h('button', { type: 'button', class: 'btn', id: 'aa-s-prev', disabled: m.page === 0, onclick: () => { m.page -= 1; drawPanel(); } }, 'Mais recentes'),
+        h('span', { class: 'areas-card-desc' }, `Página ${m.page + 1} de ${pages}`),
+        h('button', { type: 'button', class: 'btn', id: 'aa-s-next', disabled: m.page + 1 >= pages, onclick: () => { m.page += 1; drawPanel(); } }, 'Mais antigos')));
   }
 
   /* ------------------------------------------------------------------ Histórico global */

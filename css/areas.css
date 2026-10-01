@@ -128,7 +128,22 @@
 .areas-filters .input { flex: 1 1 160px; }
 .areas-tag-form { margin-bottom: var(--space-4); }
 
+/* Comunicação (Fase 5): abas internas, resultado do envio e mensagens enviadas */
+.areas-subtabs { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4); }
+.areas-subtab[aria-pressed='true'] { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-text); }
+.areas-result { display: grid; gap: var(--space-2); max-width: var(--reading-max); margin-bottom: var(--space-4); padding: var(--space-4); background: var(--ok-bg); border: 1px solid var(--ok-border); border-radius: var(--radius); }
+.areas-result p { margin: 0; }
+.areas-result-fails { display: grid; gap: var(--space-1); margin: 0; padding-left: var(--space-5); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.areas-confirm .areas-preview { max-height: 40vh; overflow: auto; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: var(--fs-sm); }
+.areas-message-text { margin: var(--space-2) 0 0; white-space: pre-wrap; }
+.areas-dests { display: grid; gap: var(--space-1); margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+.areas-dest--ok { color: var(--ok); }
+.areas-dest--fail { color: var(--warn); }
+.areas-subtab:focus-visible, .areas-pager .btn:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+
 @media (max-width: 600px) {
+  .areas-subtabs .btn { flex: 1 1 100%; }
+  .areas-pager { flex-wrap: wrap; }
   .areas-grid { grid-template-columns: 1fr; }
   .areas-title-row { align-items: flex-start; }
   .areas-editor-actions .btn { flex: 1 1 100%; }
