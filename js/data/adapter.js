@@ -306,6 +306,39 @@
  * @property {(id: string) => Result<{ sent_at: string, dm: { sent: number, failed: string[] } }>} notifyMeeting
  *           agenda.gerenciar. Privado (bot) de cada convocado: cargo e tag viram os membros ativos; DISCORD_SEND_ERRORS.noRecipients se ninguém.
  *
+ * Áreas da Staff (19_areas.sql; regras em js/core/areas.js). Só membros da área e quem tem areas.gerenciar leem o conteúdo.
+ * @property {() => Result<object[]>} listMyAreas    Staff. Áreas onde sou membro: { ...área, papel, membros, procedimentos }.
+ * @property {(slug: string) => Result<object>} getArea    Staff. { ...área, papel } (papel null = gestor sem vínculo). NOT_FOUND com
+ *           AREA_ERRORS.notFound se não existe OU se não tenho acesso (não revela qual).
+ * @property {() => Result<object[]>} listEligibleAreas    Staff. Áreas ativas com nível suficiente: { id, nome, descricao, cor, icone, nivel_minimo, ja_membro }.
+ * @property {(areaId: string) => Result<null>} joinArea    Staff. Sem nível = VALIDATION em errors._ (AREA_ERRORS.notEligible).
+ * @property {(areaId: string) => Result<null>} leaveArea    Staff. Sair de área onde não está não é erro.
+ * @property {(areaId: string) => Result<object[]>} listAreaTeam    Staff. { discord_id, display_name, role, papel, entrou_em }; vazio para quem não vê a área.
+ * @property {(areaId: string) => Result<object[]>} listAreaTags    Staff. Vazio para quem não vê a área.
+ * @property {(areaId: string) => Result<object[]>} listAreaProcedures    Staff. Vazio para quem não vê a área. Mais recentes primeiro.
+ * @property {(areaId: string, p: object) => Result<object>} saveAreaProcedure    Membro ou gestor. Cria (sem id) ou edita (autor, líder ou
+ *           gestor). Arquivar: só líder ou gestor (VALIDATION em errors._). Área arquivada = só leitura (AREA_ERRORS.archivedArea).
+ * @property {(id: string) => Result<null>} deleteAreaProcedure    Líder ou gestor. NOT_FOUND se não existe ou não vê; FORBIDDEN se vê mas não pode.
+ * @property {(areaId: string, o?: { limit?: number, offset?: number }) => Result<{ items: object[], total: number }>} listAreaHistory
+ *           Líder ou gestor (para os demais, vazio). Mais recentes primeiro.
+ * Painel de gestão das Áreas (#/areas/gerenciar). Tudo exige areas.gerenciar (FORBIDDEN sem ela).
+ * @property {() => Result<object[]>} listAreas    Todas as áreas (ativas e arquivadas) na ordem do menu: { ...área, papel: null, membros, procedimentos }.
+ * @property {(a: object) => Result<object>} saveArea    Cria (sem id; o slug sai do nome se não vier) ou edita (o slug nunca muda). VALIDATION por campo.
+ * @property {(ids: string[]) => Result<null>} reorderAreas    Grava `ordem` = posição na lista.
+ * @property {(id: string) => Result<null>} deleteArea    Apaga a área, os membros, as tags e os procedimentos (o histórico fica).
+ * @property {(areaId: string, discordId: string, papel?: 'membro'|'lider') => Result<null>} addAreaMember    Já estar na área = VALIDATION.
+ * @property {(areaId: string, discordId: string, papel: 'membro'|'lider') => Result<null>} setAreaMemberRole
+ * @property {(areaId: string, discordId: string) => Result<null>} removeAreaMember
+ * @property {() => Result<Array<{ discord_id: string, display_name: string, role: string }>>} listMembersWithoutArea    Staff ativa sem nenhuma área.
+ * @property {(areaId: string, tag: object) => Result<object>} saveAreaTag    Cria (sem id) ou edita. Nome repetido na área = VALIDATION em `nome`.
+ * @property {(id: string) => Result<null>} deleteAreaTag    Tira a tag dos procedimentos antes de apagar.
+ * @property {(areaId: string, m: { tipo: 'canal'|'dm'|'alinhamento', conteudo: string, canal_id?: string, user_ids?: string[], mencionar_cargo?: boolean, link_call?: string }) => Result<{ sent_at: string, enviados: number, falhas: number, detalhes: Array<{ discord_id: string, nome: string, status: 'ok'|'falha', erro?: string }>, registrado: boolean }>} sendAreaMessage
+ *           Edge Function (ação 'area'). 'canal': o bot posta no canal (canal_id ou o da área); 'dm': privado de cada membro ativo (user_ids vazio = a equipe toda);
+ *           'alinhamento': canal marcando as pessoas, com a call. Só membros ativos da área; área arquivada recusa; DM fechada vira falha sem parar o lote.
+ *           Grava o transcrito (areas_comunicacoes) e o registro (areas_historico).
+ * @property {(f?: { areaId?: string, actorId?: string, acao?: string, from?: string, to?: string, limit?: number, offset?: number }) => Result<{ items: object[], total: number }>} listAllAreaHistory
+ *           Histórico de todas as áreas (inclusive das apagadas). `from` e `to` são datas AAAA-MM-DD (`to` inclusivo, horário de Brasília).
+ *
  * Etapa 10 · produtividade (13_produtividade.sql; conta em js/core/productivity.js)
  * @property {(p: { from: string, to: string }) => Result<Productivity>} getProductivity   produtividade.ver. to exclusivo.
  * @property {() => Result<Array<{ discord_id: string, display_name: string }>>} listStaffNames   Staff: nomes de toda a equipe.
@@ -406,7 +439,7 @@ export const WEBHOOK_COLUMNS = Object.freeze([
 ]);
 
 /** Módulos que o banco pode ter (Staff.features). */
-export const FEATURES = Object.freeze(['agenda', 'allowlist', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos', 'discord_cargos', 'lore', 'produtividade', 'regras']);
+export const FEATURES = Object.freeze(['agenda', 'allowlist', 'areas', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos', 'discord_cargos', 'lore', 'produtividade', 'regras']);
 
 /** Campos que o cliente pode definir. Todo o resto é do servidor. */
 export const EDITABLE_FIELDS = Object.freeze([

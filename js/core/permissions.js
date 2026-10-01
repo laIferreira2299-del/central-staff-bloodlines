@@ -64,6 +64,7 @@ export const PERMISSIONS = Object.freeze([
   { code: 'regras.editar', description: 'Criar, editar e apagar regras do Livro de Regras', roles: DIRECTION },
   { code: 'agenda.ler', description: 'Ver a Agenda de Reuniões', roles: ALL_BELOW_CEO },
   { code: 'agenda.gerenciar', description: 'Criar, editar e apagar reuniões da Agenda', roles: FROM_HEAD },
+  { code: 'areas.gerenciar', description: 'Gerenciar as Áreas da Staff: áreas, membros, tags e mensagens', roles: DIRECTION },
 ].map((p) => Object.freeze({ ceoOnly: false, ...p, roles: Object.freeze([...p.roles]) })));
 
 export const PERMISSION_CODES = Object.freeze(PERMISSIONS.map((p) => p.code));

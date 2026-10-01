@@ -34,6 +34,10 @@ const ROUTES = [
   ['rules', /^#\/regras(?:\/([0-9a-f-]{36}))?$/],
   // Agenda de Reuniões
   ['agenda', /^#\/agenda$/],
+  // Áreas da Staff
+  ['areas', /^#\/areas$/],
+  ['areasAdmin', /^#\/areas\/gerenciar$/],
+  ['area', /^#\/areas\/([a-z0-9-]+)$/],
 ];
 
 /** @returns {{ name: string, slug?: string, hash: string }} */

@@ -8,8 +8,9 @@ import {
   AL_DEFAULTS, WEBHOOK_COLUMNS, pickAlAnswers, pickAlEvaluation, pickAlParticipants, pickWebhook,
 } from './adapter.js';
 import {
-  ALLOWLIST_ERRORS, DISCORD_SEND_ERRORS, MAX_PRINTS, announcementRecipients, meetingList, meetingRecipients, validateDiscordRoleIds, normalizeName, printError, sentStatus, validateAlEvaluation,
-  validateAlExtras, validateWebhook,
+  ALLOWLIST_ERRORS, AREA_DISCORD_ERRORS, AREA_HISTORY_ACTIONS, AREA_MAX_MENTIONS, DISCORD_SEND_ERRORS, MAX_PRINTS, announcementRecipients, areaRecipients,
+  meetingList, meetingRecipients, validateDiscordRoleIds, normalizeName, printError, sentStatus, validateAlEvaluation, validateAlExtras, validateAreaMessage,
+  validateWebhook,
 } from '../core/allowlist.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
 import {
@@ -18,6 +19,10 @@ import {
 } from '../core/lore.js';
 import { PRODUCTIVITY_ERRORS, aggregateProductivity } from '../core/productivity.js';
 import { RULE_ERRORS, pickRule, sortRules, validateRule } from '../core/rules.js';
+import {
+  AREA_ERRORS, AREA_MANAGE_ERRORS, AREA_ROLES, DEFAULT_AREA_COLOR, DEFAULT_TAG_COLOR, areaProcedureAccess, areaSlug, historyRange, pickArea,
+  pickAreaProcedure, pickAreaTag, validateArea, validateAreaProcedure, validateAreaTag,
+} from '../core/areas.js';
 import { MEETING_STATUS_ERRORS, findMeetingConflict, meetingConflictMessage, participantLabel, pickMeeting, sortMeetings, validateMeeting } from '../core/agenda.js';
 import {
   PROPOSAL_ERRORS, contentChanged, proposalStatus, EVALUATION_ERRORS, evaluationChangeError, validateEvaluation,
@@ -89,6 +94,7 @@ function allowlistState(seed, nowIso) {
     ...loreState(),
     ...rulesState(),
     ...agendaState(),
+    ...areasState(nowIso),
   };
 }
 
@@ -100,6 +106,22 @@ const rulesState = () => ({ rules: [] });
 
 /** Agenda de Reuniões: vazia no começo. Cada reunião guarda seus convocados em `participants`. */
 const agendaState = () => ({ meetings: [] });
+
+/** Áreas da Staff: algumas áreas de exemplo (o banco começa vazio; a gestão cria as reais), sem membros. */
+const areasState = (nowIso) => {
+  const area = (nome, slug, descricao, icone, cor, nivel_minimo, ordem) => ({
+    id: uuid(), nome, slug, descricao, icone, cor, nivel_minimo, status: 'ativa', discord_role_id: null, discord_canal_id: null,
+    ordem, criado_por: 'sistema', criado_em: nowIso, atualizado_em: nowIso,
+  });
+  return {
+    areas: [
+      area('Tickets - Clãs', 'tickets-clas', 'Pedidos e dúvidas sobre clãs.', 'users-group', '#8b0000', 3, 1),
+      area('Tickets - Bug', 'tickets-bug', 'Relatos de bugs e erros técnicos.', 'bug', '#3a6ea5', 3, 2),
+      area('Tickets - Avançado', 'tickets-avancado', 'Casos que exigem Head Staff ou acima.', 'shield-lock', '#6b4a8c', 5, 3),
+    ],
+    areaMembers: [], areaTags: [], areaProcedures: [], areaHistory: [], areaComms: [],
+  };
+};
 
 /**
  * @param {{
@@ -140,6 +162,7 @@ export function createMockAdapter({
       if (!parsed.characters) Object.assign(parsed, loreState());
       if (!parsed.rules) Object.assign(parsed, rulesState());
       if (!parsed.meetings) Object.assign(parsed, agendaState());
+      if (!parsed.areas) Object.assign(parsed, areasState(nowIso()));
       return parsed;
     } catch { return null; }
   }
@@ -297,6 +320,24 @@ export function createMockAdapter({
     participants: m.participants.map((p) => ({ ...p, label: participantLabel(p, nameOf) })),
     created_by_name: nameOf(m.created_by), updated_by_name: nameOf(m.updated_by),
   });
+  /* ---------- Áreas da Staff (simulam o 19_areas.sql) ---------- */
+  /** Quem enxerga a área (RLS): membro ou gestor. Devolve o papel (ou null para gestor sem vínculo); null se não vê. */
+  function areaView(area, staff, can) {
+    const papel = state.areaMembers.find((m) => m.area_id === area.id && m.discord_id === staff.discord_id)?.papel ?? null;
+    return papel !== null || can('areas.gerenciar') ? { papel } : null;
+  }
+  const areaCard = (area, papel) => area && ({
+    ...clone(area), papel,
+    membros: state.areaMembers.filter((m) => m.area_id === area.id).length,
+    procedimentos: state.areaProcedures.filter((p) => p.area_id === area.id && p.status !== 'arquivado').length,
+  });
+  const presentAreaProcedure = (p) => ({ ...clone(p), criado_por_name: nameOf(p.criado_por), atualizado_por_name: nameOf(p.atualizado_por) });
+  function logArea(staff, area, acao, entidade, entidadeId, detalhes) {
+    state.areaHistory.push({
+      id: Math.max(0, ...state.areaHistory.map((e) => e.id)) + 1, area_id: area?.id ?? null, area_nome: area?.nome ?? null,
+      acao, entidade, entidade_id: entidadeId, ator_id: staff.discord_id, detalhes: clone(detalhes), criado_em: nowIso(),
+    });
+  }
   /** Muda o status da reunião só se estiver no estado esperado (mesma regra do banco: só anda para a frente). */
   function moveMeeting(id, from, to, wrongState, staff) {
     const row = state.meetings.find((x) => x.id === id);
@@ -1355,6 +1396,315 @@ export function createMockAdapter({
         state.meetings = state.meetings.filter((x) => x !== row);
         save();
         return ok(null);
+      });
+    },
+
+    /* ----- Áreas da Staff (19_areas.sql; regras em js/core/areas.js) ----- */
+    async listMyAreas() {
+      return run('listMyAreas', 'staff', async ({ staff }) => {
+        const mine = state.areaMembers.filter((m) => m.discord_id === staff.discord_id);
+        const cards = mine.map((m) => areaCard(state.areas.find((a) => a.id === m.area_id), m.papel)).filter(Boolean);
+        return ok(cards.sort((a, b) => a.ordem - b.ordem || a.nome.localeCompare(b.nome, 'pt-BR')));
+      });
+    },
+
+    async getArea(slug) {
+      return run('getArea', 'staff', async ({ staff, can }) => {
+        const area = state.areas.find((a) => a.slug === slug);
+        const seen = area && areaView(area, staff, can);
+        if (!seen) return fail('NOT_FOUND', AREA_ERRORS.notFound);
+        return ok({ ...clone(area), papel: seen.papel });
+      });
+    },
+
+    async listEligibleAreas() {
+      return run('listEligibleAreas', 'staff', async ({ staff }) => ok(state.areas
+        .filter((a) => a.status === 'ativa' && a.nivel_minimo <= roleLevel(staff.role))
+        .sort((a, b) => a.ordem - b.ordem || a.nome.localeCompare(b.nome, 'pt-BR'))
+        .map((a) => ({
+          id: a.id, nome: a.nome, descricao: a.descricao, cor: a.cor, icone: a.icone, nivel_minimo: a.nivel_minimo,
+          ja_membro: state.areaMembers.some((m) => m.area_id === a.id && m.discord_id === staff.discord_id),
+        }))));
+    },
+
+    async joinArea(areaId) {
+      return run('joinArea', 'staff', async ({ staff }) => {
+        const area = state.areas.find((a) => a.id === areaId);
+        if (!area || area.status !== 'ativa' || area.nivel_minimo > roleLevel(staff.role)) return validationError({ _: AREA_ERRORS.notEligible });
+        if (!state.areaMembers.some((m) => m.area_id === areaId && m.discord_id === staff.discord_id)) {
+          const row = { area_id: areaId, discord_id: staff.discord_id, papel: 'membro', entrou_em: nowIso() };
+          state.areaMembers.push(row);
+          logArea(staff, area, 'insert', 'areas_membros', staff.discord_id, row);
+          save();
+        }
+        return ok(null);
+      });
+    },
+
+    async leaveArea(areaId) {
+      return run('leaveArea', 'staff', async ({ staff }) => {
+        const row = state.areaMembers.find((m) => m.area_id === areaId && m.discord_id === staff.discord_id);
+        if (row) {
+          state.areaMembers = state.areaMembers.filter((m) => m !== row);
+          logArea(staff, state.areas.find((a) => a.id === areaId), 'delete', 'areas_membros', staff.discord_id, row);
+          save();
+        }
+        return ok(null);
+      });
+    },
+
+    async listAreaTeam(areaId) {
+      return run('listAreaTeam', 'staff', async ({ staff, can }) => {
+        const area = state.areas.find((a) => a.id === areaId);
+        if (!area || !areaView(area, staff, can)) return ok([]);
+        return ok(state.areaMembers.filter((m) => m.area_id === areaId)
+          .map((m) => ({ m, s: state.staff.find((x) => x.discord_id === m.discord_id) })).filter(({ s }) => s?.active)
+          .map(({ m, s }) => ({ discord_id: m.discord_id, display_name: s.display_name, role: s.role, papel: m.papel, entrou_em: m.entrou_em }))
+          .sort((a, b) => (b.papel === 'lider') - (a.papel === 'lider') || a.display_name.localeCompare(b.display_name, 'pt-BR')));
+      });
+    },
+
+    async listAreaTags(areaId) {
+      return run('listAreaTags', 'staff', async ({ staff, can }) => {
+        const area = state.areas.find((a) => a.id === areaId);
+        if (!area || !areaView(area, staff, can)) return ok([]);
+        return ok(clone(state.areaTags.filter((t) => t.area_id === areaId)).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')));
+      });
+    },
+
+    async listAreaProcedures(areaId) {
+      return run('listAreaProcedures', 'staff', async ({ staff, can }) => {
+        const area = state.areas.find((a) => a.id === areaId);
+        if (!area || !areaView(area, staff, can)) return ok([]);
+        return ok(state.areaProcedures.filter((p) => p.area_id === areaId).map(presentAreaProcedure));
+      });
+    },
+
+    async saveAreaProcedure(areaId, input = {}) {
+      return run('saveAreaProcedure', 'staff', async ({ staff, can }) => {
+        const area = state.areas.find((a) => a.id === areaId);
+        const seen = area && areaView(area, staff, can);
+        if (!seen) return fail('FORBIDDEN');
+        const row = input.id ? state.areaProcedures.find((p) => p.id === input.id && p.area_id === areaId) : null;
+        if (input.id && !row) return fail('NOT_FOUND', 'Procedimento não encontrado.');
+        const access = areaProcedureAccess({
+          papel: seen.papel, manager: can('areas.gerenciar'), authorId: row?.criado_por ?? null, myId: staff.discord_id,
+        });
+        if (row ? !access.edit : !access.create) return fail('FORBIDDEN');
+        if (area.status !== 'ativa') return validationError({ _: AREA_ERRORS.archivedArea });
+        const next = { titulo: '', conteudo: '', status: 'publicado', tags: [], ...(row ? pickAreaProcedure(row) : {}), ...pickAreaProcedure(input) };
+        const { valid, errors } = validateAreaProcedure(next);
+        if (!valid) return validationError(errors);
+        if (!access.archive && (next.status === 'arquivado' || row?.status === 'arquivado')) return validationError({ _: AREA_ERRORS.archiveRestricted });
+        if (next.tags.some((t) => !state.areaTags.some((g) => g.id === t && g.area_id === areaId))) return validationError({ _: AREA_ERRORS.foreignTag });
+        const at = nowIso();
+        const before = row ? clone(row) : null;
+        const target = row ?? { id: uuid(), area_id: areaId, criado_por: staff.discord_id, criado_em: at };
+        Object.assign(target, next, { atualizado_por: staff.discord_id, atualizado_em: at });
+        if (!row) state.areaProcedures.push(target);
+        logArea(staff, area, row ? 'update' : 'insert', 'areas_procedimentos', target.id, row ? { antes: before, depois: clone(target) } : target);
+        save();
+        return ok(presentAreaProcedure(target));
+      });
+    },
+
+    async deleteAreaProcedure(id) {
+      return run('deleteAreaProcedure', 'staff', async ({ staff, can }) => {
+        const row = state.areaProcedures.find((p) => p.id === id);
+        const area = row && state.areas.find((a) => a.id === row.area_id);
+        const seen = area && areaView(area, staff, can);
+        if (!seen) return fail('NOT_FOUND', 'Procedimento não encontrado.');
+        if (!(seen.papel === 'lider' || can('areas.gerenciar'))) return fail('FORBIDDEN');
+        state.areaProcedures = state.areaProcedures.filter((p) => p !== row);
+        logArea(staff, area, 'delete', 'areas_procedimentos', row.id, row);
+        save();
+        return ok(null);
+      });
+    },
+
+    async listAreaHistory(areaId, { limit = 20, offset = 0 } = {}) {
+      return run('listAreaHistory', 'staff', async ({ staff, can }) => {
+        const area = state.areas.find((a) => a.id === areaId);
+        const seen = area && areaView(area, staff, can);
+        if (!seen || !(seen.papel === 'lider' || can('areas.gerenciar'))) return ok({ items: [], total: 0 });
+        const all = state.areaHistory.filter((e) => e.area_id === areaId).sort((a, b) => b.id - a.id);
+        return ok({ items: all.slice(offset, offset + limit).map((e) => ({ ...clone(e), ator_nome: nameOf(e.ator_id) })), total: all.length });
+      });
+    },
+
+    /* ----- Áreas da Staff: painel de gestão (areas.gerenciar) ----- */
+    async listAreas() {
+      return run('listAreas', 'areas.gerenciar', async () => ok(clone(state.areas)
+        .sort((a, b) => a.ordem - b.ordem || a.nome.localeCompare(b.nome, 'pt-BR'))
+        .map((a) => areaCard(a, null))));
+    },
+
+    async saveArea(input = {}) {
+      return run('saveArea', 'areas.gerenciar', async ({ staff }) => {
+        const row = input.id ? state.areas.find((a) => a.id === input.id) : null;
+        if (input.id && !row) return fail('NOT_FOUND', 'Área não encontrada.');
+        const picked = pickArea(input);
+        const slug = row ? row.slug : (picked.slug || areaSlug(picked.nome ?? '', state.areas.map((a) => a.slug)));
+        const next = {
+          descricao: null, icone: null, cor: DEFAULT_AREA_COLOR, nivel_minimo: 1, status: 'ativa', discord_role_id: null, discord_canal_id: null,
+          ordem: Math.max(0, ...state.areas.map((a) => a.ordem)) + 1, ...(row ? pickArea(row) : {}), ...picked, slug,
+        };
+        const { valid, errors } = validateArea(next);
+        if (!valid) return validationError(errors);
+        if (state.areas.some((a) => a.id !== row?.id && a.slug === slug)) return validationError({ slug: AREA_MANAGE_ERRORS.slugTaken });
+        const at = nowIso();
+        const before = row ? clone(row) : null;
+        const target = row ?? { id: uuid(), criado_por: staff.discord_id, criado_em: at };
+        Object.assign(target, next, { atualizado_em: at });
+        if (!row) state.areas.push(target);
+        logArea(staff, target, row ? 'update' : 'insert', 'areas', target.id, row ? { antes: before, depois: clone(target) } : target);
+        save();
+        return ok(areaCard(target, null));
+      });
+    },
+
+    async reorderAreas(ids = []) {
+      return run('reorderAreas', 'areas.gerenciar', async ({ staff }) => {
+        ids.forEach((id, i) => {
+          const area = state.areas.find((a) => a.id === id);
+          if (!area || area.ordem === i + 1) return;
+          const before = clone(area);
+          Object.assign(area, { ordem: i + 1, atualizado_em: nowIso() });
+          logArea(staff, area, 'update', 'areas', area.id, { antes: before, depois: clone(area) });
+        });
+        save();
+        return ok(null);
+      });
+    },
+
+    async deleteArea(id) {
+      return run('deleteArea', 'areas.gerenciar', async ({ staff }) => {
+        const area = state.areas.find((a) => a.id === id);
+        if (!area) return fail('NOT_FOUND', 'Área não encontrada.');
+        state.areas = state.areas.filter((a) => a !== area);
+        for (const key of ['areaMembers', 'areaTags', 'areaProcedures']) state[key] = state[key].filter((x) => x.area_id !== id);
+        logArea(staff, area, 'delete', 'areas', area.id, area);
+        save();
+        return ok(null);
+      });
+    },
+
+    async addAreaMember(areaId, discordId, papel = 'membro') {
+      return run('addAreaMember', 'areas.gerenciar', async ({ staff }) => {
+        const area = state.areas.find((a) => a.id === areaId);
+        if (!area) return fail('NOT_FOUND', 'Área não encontrada.');
+        if (!AREA_ROLES.includes(papel)) return validationError({ papel: AREA_MANAGE_ERRORS.role });
+        if (!state.staff.some((s) => s.discord_id === discordId)) return validationError({ discord_id: AREA_MANAGE_ERRORS.member });
+        if (state.areaMembers.some((m) => m.area_id === areaId && m.discord_id === discordId)) return validationError({ _: AREA_MANAGE_ERRORS.alreadyMember });
+        const row = { area_id: areaId, discord_id: discordId, papel, entrou_em: nowIso() };
+        state.areaMembers.push(row);
+        logArea(staff, area, 'insert', 'areas_membros', discordId, row);
+        save();
+        return ok(null);
+      });
+    },
+
+    async setAreaMemberRole(areaId, discordId, papel) {
+      return run('setAreaMemberRole', 'areas.gerenciar', async ({ staff }) => {
+        if (!AREA_ROLES.includes(papel)) return validationError({ papel: AREA_MANAGE_ERRORS.role });
+        const row = state.areaMembers.find((m) => m.area_id === areaId && m.discord_id === discordId);
+        if (!row) return fail('NOT_FOUND', 'Membro não encontrado nesta área.');
+        const before = clone(row);
+        row.papel = papel;
+        logArea(staff, state.areas.find((a) => a.id === areaId), 'update', 'areas_membros', discordId, { antes: before, depois: clone(row) });
+        save();
+        return ok(null);
+      });
+    },
+
+    async removeAreaMember(areaId, discordId) {
+      return run('removeAreaMember', 'areas.gerenciar', async ({ staff }) => {
+        const row = state.areaMembers.find((m) => m.area_id === areaId && m.discord_id === discordId);
+        if (!row) return fail('NOT_FOUND', 'Membro não encontrado nesta área.');
+        state.areaMembers = state.areaMembers.filter((m) => m !== row);
+        logArea(staff, state.areas.find((a) => a.id === areaId), 'delete', 'areas_membros', discordId, row);
+        save();
+        return ok(null);
+      });
+    },
+
+    async listMembersWithoutArea() {
+      return run('listMembersWithoutArea', 'areas.gerenciar', async () => ok(state.staff
+        .filter((s) => s.active && !state.areaMembers.some((m) => m.discord_id === s.discord_id))
+        .map((s) => ({ discord_id: s.discord_id, display_name: s.display_name, role: s.role }))
+        .sort((a, b) => a.display_name.localeCompare(b.display_name, 'pt-BR'))));
+    },
+
+    async saveAreaTag(areaId, input = {}) {
+      return run('saveAreaTag', 'areas.gerenciar', async ({ staff }) => {
+        const area = state.areas.find((a) => a.id === areaId);
+        if (!area) return fail('NOT_FOUND', 'Área não encontrada.');
+        const row = input.id ? state.areaTags.find((t) => t.id === input.id && t.area_id === areaId) : null;
+        if (input.id && !row) return fail('NOT_FOUND', 'Tag não encontrada.');
+        const next = { nome: '', cor: DEFAULT_TAG_COLOR, discord_role_id: null, ...(row ? pickAreaTag(row) : {}), ...pickAreaTag(input) };
+        const { valid, errors } = validateAreaTag(next);
+        if (!valid) return validationError(errors);
+        if (state.areaTags.some((t) => t.area_id === areaId && t.id !== row?.id && t.nome === next.nome)) return validationError({ nome: AREA_MANAGE_ERRORS.tagTaken });
+        const before = row ? clone(row) : null;
+        const target = row ?? { id: uuid(), area_id: areaId };
+        Object.assign(target, next);
+        if (!row) state.areaTags.push(target);
+        logArea(staff, area, row ? 'update' : 'insert', 'areas_tags', target.id, row ? { antes: before, depois: clone(target) } : target);
+        save();
+        return ok(clone(target));
+      });
+    },
+
+    async deleteAreaTag(id) {
+      return run('deleteAreaTag', 'areas.gerenciar', async ({ staff }) => {
+        const tag = state.areaTags.find((t) => t.id === id);
+        if (!tag) return fail('NOT_FOUND', 'Tag não encontrada.');
+        const area = state.areas.find((a) => a.id === tag.area_id);
+        if (area?.status !== 'ativa' && state.areaProcedures.some((p) => p.tags.includes(id))) return validationError({ _: AREA_ERRORS.archivedArea });
+        // Como o site de verdade: tira a tag dos procedimentos antes (o banco recusa tag que não existe mais).
+        for (const p of state.areaProcedures) if (p.tags.includes(id)) p.tags = p.tags.filter((t) => t !== id);
+        state.areaTags = state.areaTags.filter((t) => t !== tag);
+        logArea(staff, area, 'delete', 'areas_tags', id, tag);
+        save();
+        return ok(null);
+      });
+    },
+
+    async listAllAreaHistory({ areaId = '', actorId = '', acao = '', from = '', to = '', limit = 20, offset = 0 } = {}) {
+      return run('listAllAreaHistory', 'areas.gerenciar', async () => {
+        const { start, end } = historyRange({ from, to });
+        const all = state.areaHistory.filter((e) => (!areaId || e.area_id === areaId) && (!actorId || e.ator_id === actorId) && (!acao || e.acao === acao)
+          && (!start || e.criado_em >= start) && (!end || e.criado_em < end)).sort((a, b) => b.id - a.id);
+        return ok({ items: all.slice(offset, offset + limit).map((e) => ({ ...clone(e), ator_nome: nameOf(e.ator_id) })), total: all.length });
+      });
+    },
+
+    /* Simula a ação 'area' da Edge Function: mesmas travas, nada vai ao Discord de verdade; grava o transcrito e o histórico. */
+    async sendAreaMessage(areaId, { tipo, conteudo, canal_id = '', user_ids = [], mencionar_cargo = false, link_call = '' } = {}) {
+      return run('sendAreaMessage', 'areas.gerenciar', async ({ staff }) => {
+        const check = validateAreaMessage({ kind: tipo, conteudo, canal_id, user_ids, link_call });
+        if (!check.valid) return validationError(check.errors);
+        const area = state.areas.find((a) => a.id === areaId);
+        if (!area) return fail('NOT_FOUND', AREA_DISCORD_ERRORS.areaNotFound);
+        if (area.status !== 'ativa') return validationError({ _: AREA_DISCORD_ERRORS.archived });
+        const members = state.areaMembers.filter((m) => m.area_id === areaId)
+          .map((m) => state.staff.find((s) => s.discord_id === m.discord_id)).filter((s) => s?.active);
+        const { recipients, unknown } = areaRecipients(user_ids, members);
+        if (unknown.length) return validationError({ _: AREA_DISCORD_ERRORS.notMembers });
+        if (tipo !== 'canal' && !recipients.length) return validationError({ _: AREA_DISCORD_ERRORS.noRecipients });
+        if (tipo !== 'dm' && mencionar_cargo === true && !area.discord_role_id) return validationError({ _: AREA_DISCORD_ERRORS.noRole });
+        const channel = String(canal_id).trim() || area.discord_canal_id;
+        if (tipo !== 'dm' && !channel) return validationError({ _: AREA_DISCORD_ERRORS.noChannel });
+        if (tipo === 'alinhamento' && recipients.length > AREA_MAX_MENTIONS && !(mencionar_cargo === true)) return validationError({ _: AREA_DISCORD_ERRORS.tooManyMentions });
+        const detalhes = tipo === 'canal' ? [] : recipients.map((r) => ({ discord_id: r.discord_id, nome: r.display_name, status: 'ok' }));
+        const enviados = tipo === 'canal' ? 1 : detalhes.length;
+        const text = String(conteudo).trim();
+        const at = nowIso();
+        const comm = { id: uuid(), area_id: areaId, area_nome: area.nome, tipo, canal_id: tipo === 'dm' ? null : channel, conteudo: text, destinatarios: detalhes, enviado_por: staff.discord_id, criado_em: at };
+        (state.areaComms ??= []).push(comm);
+        logArea(staff, area, AREA_HISTORY_ACTIONS[tipo], 'comunicacao', comm.id, { tipo, canal_id: comm.canal_id, enviados, falhas: 0, conteudo: text.slice(0, 300) });
+        save();
+        return ok({ sent_at: at, enviados, falhas: 0, detalhes: clone(detalhes), registrado: true });
       });
     },
 

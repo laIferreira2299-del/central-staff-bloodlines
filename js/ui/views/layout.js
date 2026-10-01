@@ -92,6 +92,15 @@ export function agendaLinks(app) {
   return [{ href: '#/agenda', ico: 'calendar-event', label: 'Agenda de Reuniões' }];
 }
 
+/** Áreas da Staff: seção "Áreas" do menu (só com o 19_areas.sql no banco). Bolinha enquanto a pessoa não tem nenhuma área. */
+export function areasLinks(app) {
+  if (!app.feature('areas')) return [];
+  return [
+    { href: '#/areas', ico: 'users-group', label: 'Minhas Áreas', dot: app.state.counts.noAreas > 0 },
+    ...(app.can('areas.gerenciar') ? [{ href: '#/areas/gerenciar', ico: 'settings', label: 'Gerenciar Áreas' }] : []),
+  ];
+}
+
 export function renderSidebar(app) {
   const { procedures, filters } = app.state;
   const visible = procedures.filter((p) => p.status !== 'arquivado');
@@ -114,9 +123,11 @@ export function renderSidebar(app) {
   const lore = loreLinks(app);
   const rulesNav = rulesLinks(app);
   const agendaNav = agendaLinks(app);
-  const navLink = ({ href, ico, label, count }) =>
+  const areasNav = areasLinks(app);
+  const navLink = ({ href, ico, label, count, dot }) =>
     h('a', { class: 'cat-item', href, 'data-nav': '', 'aria-current': String(app.router.route.hash === href) },
       h('span', { class: 'cat-label' }, icon(ico), ' ', label),
+      dot && h('span', { class: 'areas-dot', 'data-testid': 'areas-dot' }, h('span', { class: 'sr-only' }, 'Escolha uma área')),
       count > 0 && h('span', { class: 'cat-count cat-count--alert' }, h('span', { class: 'sr-only' }, ', '), count, h('span', { class: 'sr-only' }, ' novos')));
 
   app.els.sidebar.replaceChildren(...[
@@ -145,6 +156,9 @@ export function renderSidebar(app) {
     agendaNav.length > 0 && h('nav', { class: 'sidebar-tools', id: 'sidebar-agenda', 'aria-labelledby': 'sidebar-agenda-title' },
       h('h2', { class: 'sidebar-title', id: 'sidebar-agenda-title' }, 'Agenda'),
       agendaNav.map(navLink)),
+    areasNav.length > 0 && h('nav', { class: 'sidebar-tools', id: 'sidebar-areas', 'aria-labelledby': 'sidebar-areas-title' },
+      h('h2', { class: 'sidebar-title', id: 'sidebar-areas-title' }, 'Áreas'),
+      areasNav.map(navLink)),
     links.length > 0 && h('nav', { class: 'sidebar-tools', 'aria-labelledby': 'sidebar-admin-title' },
       h('h2', { class: 'sidebar-title', id: 'sidebar-admin-title' }, 'Administração'),
       links.map(navLink)),

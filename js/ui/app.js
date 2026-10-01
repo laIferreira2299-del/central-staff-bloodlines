@@ -31,6 +31,8 @@ import { renderCharacter, renderCharacters } from './views/characters.js';
 import { renderProductivity } from './views/productivity.js';
 import { renderRules } from './views/rules.js';
 import { renderAgenda } from './views/agenda.js';
+import { renderArea, renderAreas } from './views/areas.js';
+import { renderAreasAdmin } from './views/areas-admin.js';
 
 const SEARCH_DEBOUNCE_MS = 150;
 const EMPTY_FILTERS = Object.freeze({ category: '', audience: '', status: '', favoritesOnly: false });
@@ -54,7 +56,7 @@ export function createApp(adapter, { isMock = false } = {}) {
     prefillTitle: '',
     ready: false,
     // Etapas 2B, 3 e 11: contadores do menu e avisos visíveis para quem está logado.
-    counts: { proposals: 0, evaluations: 0, announcements: 0 },
+    counts: { proposals: 0, evaluations: 0, announcements: 0, noAreas: 0 },
     announcements: [],
   };
   const shownUrgent = new Set();
@@ -96,7 +98,7 @@ export function createApp(adapter, { isMock = false } = {}) {
     async refreshCounts() {
       const token = authToken;
       const me = state.staff?.discord_id;
-      const counts = { proposals: 0, evaluations: 0, announcements: 0 };
+      const counts = { proposals: 0, evaluations: 0, announcements: 0, noAreas: 0 };
       let announcements = state.announcements;
       await Promise.all([
         app.feature('aprovacao') && app.can('procedimentos.aprovar') && adapter.listProposals().then((r) => {
@@ -104,6 +106,9 @@ export function createApp(adapter, { isMock = false } = {}) {
         }),
         app.feature('avaliacoes') && app.can('avaliacoes.ler') && adapter.listEvaluations().then((r) => {
           if (!r.error) counts.evaluations = r.data.filter((e) => e.status === 'enviada' && !e.read_at && e.evaluator_id !== me).length;
+        }),
+        app.feature('areas') && adapter.listMyAreas().then((r) => {
+          if (!r.error) counts.noAreas = r.data.length === 0 ? 1 : 0;
         }),
         app.feature('avisos') && adapter.listAnnouncements().then((r) => {
           if (!r.error) announcements = r.data.filter((a) => isAnnouncementFor(a, state.staff));
@@ -177,7 +182,7 @@ export function createApp(adapter, { isMock = false } = {}) {
     /** Re-renderiza a rota atual mantendo rolagem e foco (após mudança de dados). */
     render() {
       const route = router.route;
-      if (!state.ready || ['new', 'edit', 'permissions', 'evaluation', 'evaluations', 'announcements', 'proposal', 'alForm', 'interview', 'alHistory', 'alDetail', 'webhooks', 'gabarito', 'loreNames', 'characters', 'character', 'productivity', 'rules', 'agenda'].includes(route.name)) return;
+      if (!state.ready || ['new', 'edit', 'permissions', 'evaluation', 'evaluations', 'announcements', 'proposal', 'alForm', 'interview', 'alHistory', 'alDetail', 'webhooks', 'gabarito', 'loreNames', 'characters', 'character', 'productivity', 'rules', 'agenda', 'areas', 'areasAdmin', 'area'].includes(route.name)) return;
       const key = document.activeElement?.dataset?.focusKey;
       const y = window.scrollY;
       showRoute(route, { navigated: false });
@@ -316,6 +321,9 @@ export function createApp(adapter, { isMock = false } = {}) {
       productivity: () => renderProductivity(app),
       rules: () => renderRules(app, route.slug ?? null),
       agenda: () => renderAgenda(app),
+      areas: () => renderAreas(app),
+      areasAdmin: () => renderAreasAdmin(app),
+      area: () => renderArea(app, route.slug),
       notfound: () => renderMessage(app, { title: 'Página não encontrada', text: 'Volte para a lista de procedimentos.' }),
     };
     const mount = () => {

@@ -9,7 +9,8 @@ import {
   AL_DEFAULTS, WEBHOOK_COLUMNS, pickAlAnswers, pickAlEvaluation, pickAlParticipants, pickWebhook,
 } from './adapter.js';
 import {
-  ALLOWLIST_ERRORS, DISCORD_SEND_ERRORS, MAX_PRINTS, validateDiscordRoleIds, printError, validateAlEvaluation, validateAlExtras, validateWebhook,
+  ALLOWLIST_ERRORS, AREA_DISCORD_ERRORS, DISCORD_SEND_ERRORS, MAX_PRINTS, validateDiscordRoleIds, printError, validateAlEvaluation, validateAlExtras,
+  validateAreaMessage, validateWebhook,
 } from '../core/allowlist.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
 import {
@@ -18,6 +19,10 @@ import {
 } from '../core/lore.js';
 import { PRODUCTIVITY_ERRORS } from '../core/productivity.js';
 import { RULE_ERRORS, pickRule, validateRule } from '../core/rules.js';
+import {
+  AREA_DISCORD_ID, AREA_ERRORS, AREA_MANAGE_ERRORS, AREA_ROLES, DEFAULT_AREA_COLOR, DEFAULT_TAG_COLOR, areaProcedureAccess, areaSlug, historyRange,
+  pickArea, pickAreaProcedure, pickAreaTag, validateArea, validateAreaProcedure, validateAreaTag,
+} from '../core/areas.js';
 import { CONFLICT_PREFIX, MEETING_STATUS_ERRORS, participantLabel, pickMeeting, validateMeeting } from '../core/agenda.js';
 import {
   PROPOSAL_ERRORS, PROPOSAL_NOTE_MAX, proposalStatus, validateAnnouncement, validateEvaluation,
@@ -36,6 +41,10 @@ const PRINTS_BUCKET = 'al-prints';
 const PHOTOS_BUCKET = 'character-photos';
 // '*' (e não a lista): o campo status só existe depois do SQL 18; o site funciona com o banco antigo e com o novo.
 const MEETING_COLUMNS = '*, meeting_participants (kind, value)';
+const AREA_COLUMNS = 'id, nome, slug, descricao, icone, cor, nivel_minimo, status, discord_role_id, discord_canal_id, ordem, criado_por, criado_em, atualizado_em';
+const AREA_PROCEDURE_COLUMNS = 'id, area_id, titulo, conteudo, status, tags, criado_por, criado_em, atualizado_por, atualizado_em';
+const AREA_TAG_COLUMNS = 'id, area_id, nome, cor, discord_role_id';
+const AREA_HISTORY_COLUMNS = 'id, area_id, area_nome, acao, entidade, entidade_id, ator_id, detalhes, criado_em';
 const RULE_COLUMNS = 'id, title, category, content, position, created_by, created_at, updated_by, updated_at';
 const CHARACTER_COLUMNS = 'id, character_name, discord_name, discord_id, city_id, photo_path, status, version, created_by, created_at, updated_by, updated_at';
 const FUNCTION_NAME = 'enviar-discord';
@@ -209,6 +218,12 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     participants: (list ?? []).map((p) => ({ kind: p.kind, value: p.value, label: participantLabel(p, nameOf) })),
     created_by_name: nameOf(m.created_by), updated_by_name: nameOf(m.updated_by),
   });
+  const presentAreaProcedure = (p) => ({ ...p, tags: p.tags ?? [], criado_por_name: nameOf(p.criado_por), atualizado_por_name: nameOf(p.atualizado_por) });
+  /** Papel de quem está logado na área (null = sem vínculo). Filtra pelo próprio Discord ID: a gestão vê todos os vínculos. */
+  async function myAreaRole(areaId, discordId) {
+    const { data } = await sb.from('areas_membros').select('papel').eq('area_id', areaId).eq('discord_id', discordId).maybeSingle();
+    return data?.papel ?? null;
+  }
   const presentRule = (r) => ({ ...r, created_by_name: nameOf(r.created_by), updated_by_name: nameOf(r.updated_by) });
   const presentCharacter = (c, urls) => ({
     ...c, photo_url: c.photo_path ? urls.get(c.photo_path) ?? null : null,
@@ -1219,6 +1234,283 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       const { data, error, status } = await sb.from('meetings').delete().eq('id', id).select('id');
       if (error) return failFrom(error, status);
       return data?.length ? ok(null) : fail('NOT_FOUND', 'Reunião não encontrada.');
+    },
+
+    /* ----- Áreas da Staff (19_areas.sql) ----- */
+    async listMyAreas() {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { data, error, status } = await sb.rpc('minhas_areas');
+      if (error) return failFrom(error, status);
+      return ok(data.map((a) => ({ ...a, membros: Number(a.membros), procedimentos: Number(a.procedimentos) })));
+    },
+
+    async getArea(slug) {
+      const { staff, error: g } = await guard();
+      if (g) return g;
+      const { data, error, status } = await sb.from('areas').select(AREA_COLUMNS).eq('slug', String(slug)).maybeSingle();
+      if (error) return failFrom(error, status);
+      if (!data) return fail('NOT_FOUND', AREA_ERRORS.notFound);
+      return ok({ ...data, papel: await myAreaRole(data.id, staff.discord_id) });
+    },
+
+    async listEligibleAreas() {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { data, error, status } = await sb.rpc('listar_areas_elegiveis');
+      return error ? failFrom(error, status) : ok(data);
+    },
+
+    async joinArea(areaId) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { error, status } = await sb.rpc('entrar_na_area', { p_area: areaId });
+      return error ? failFrom(error, status) : ok(null);
+    },
+
+    async leaveArea(areaId) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { error, status } = await sb.rpc('sair_da_area', { p_area: areaId });
+      return error ? failFrom(error, status) : ok(null);
+    },
+
+    async listAreaTeam(areaId) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { data, error, status } = await sb.rpc('equipe_da_area', { p_area: areaId });
+      return error ? failFrom(error, status) : ok(data);
+    },
+
+    async listAreaTags(areaId) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { data, error, status } = await sb.from('areas_tags').select(AREA_TAG_COLUMNS).eq('area_id', areaId).order('nome');
+      return error ? failFrom(error, status) : ok(data);
+    },
+
+    async listAreaProcedures(areaId) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { data, error, status } = await sb.from('areas_procedimentos').select(AREA_PROCEDURE_COLUMNS).eq('area_id', areaId)
+        .order('atualizado_em', { ascending: false });
+      if (error) return failFrom(error, status);
+      await loadNames();
+      return ok(data.map(presentAreaProcedure));
+    },
+
+    async saveAreaProcedure(areaId, input = {}) {
+      const { staff, can, error: g } = await guard();
+      if (g) return g;
+      const { data: area, error: e0, status: s0 } = await sb.from('areas').select('id, status').eq('id', areaId).maybeSingle();
+      if (e0) return failFrom(e0, s0);
+      if (!area) return fail('FORBIDDEN');
+      let row = null;
+      if (input.id) {
+        const { data, error, status } = await sb.from('areas_procedimentos').select(AREA_PROCEDURE_COLUMNS).eq('id', input.id).eq('area_id', areaId).maybeSingle();
+        if (error) return failFrom(error, status);
+        if (!data) return fail('NOT_FOUND', 'Procedimento não encontrado.');
+        row = data;
+      }
+      const papel = await myAreaRole(areaId, staff.discord_id);
+      const access = areaProcedureAccess({ papel, manager: can('areas.gerenciar'), authorId: row?.criado_por ?? null, myId: staff.discord_id });
+      if (row ? !access.edit : !access.create) return fail('FORBIDDEN');
+      if (area.status !== 'ativa') return validation({ _: AREA_ERRORS.archivedArea });
+      const next = { titulo: '', conteudo: '', status: 'publicado', tags: [], ...(row ? pickAreaProcedure(row) : {}), ...pickAreaProcedure(input) };
+      const { valid, errors } = validateAreaProcedure(next);
+      if (!valid) return validation(errors);
+      const table = sb.from('areas_procedimentos');
+      const { data, error, status } = row
+        ? await table.update(next).eq('id', row.id).select(AREA_PROCEDURE_COLUMNS).maybeSingle()
+        : await table.insert({ ...next, area_id: areaId }).select(AREA_PROCEDURE_COLUMNS).single();
+      if (error) return failFrom(error, status);
+      if (!data) return fail('FORBIDDEN');
+      await loadNames();
+      return ok(presentAreaProcedure(data));
+    },
+
+    async deleteAreaProcedure(id) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const found = await sb.from('areas_procedimentos').select('id').eq('id', id).maybeSingle();
+      if (found.error) return failFrom(found.error, found.status);
+      if (!found.data) return fail('NOT_FOUND', 'Procedimento não encontrado.');
+      const { data, error, status } = await sb.from('areas_procedimentos').delete().eq('id', id).select('id');
+      if (error) return failFrom(error, status);
+      return data?.length ? ok(null) : fail('FORBIDDEN');
+    },
+
+    async listAreaHistory(areaId, { limit = 20, offset = 0 } = {}) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { data, error, status, count } = await sb.from('areas_historico').select(AREA_HISTORY_COLUMNS, { count: 'exact' })
+        .eq('area_id', areaId).order('id', { ascending: false }).range(offset, offset + limit - 1);
+      if (error) return failFrom(error, status);
+      await loadNames();
+      return ok({ items: data.map((e) => ({ ...e, ator_nome: nameOf(e.ator_id) })), total: count ?? data.length });
+    },
+
+    /* ----- Áreas da Staff: painel de gestão (areas.gerenciar) ----- */
+    async listAreas() {
+      const { error: g } = await guard('areas.gerenciar');
+      if (g) return g;
+      const [areas, members, procs] = await Promise.all([
+        sb.from('areas').select(AREA_COLUMNS).order('ordem').order('nome'),
+        sb.from('areas_membros').select('area_id'),
+        sb.from('areas_procedimentos').select('area_id').neq('status', 'arquivado'),
+      ]);
+      for (const r of [areas, members, procs]) if (r.error) return failFrom(r.error, r.status);
+      const count = (rows, id) => rows.data.filter((x) => x.area_id === id).length;
+      return ok(areas.data.map((a) => ({ ...a, papel: null, membros: count(members, a.id), procedimentos: count(procs, a.id) })));
+    },
+
+    async saveArea(input = {}) {
+      const { error: g } = await guard('areas.gerenciar');
+      if (g) return g;
+      let row = null;
+      if (input.id) {
+        const found = await sb.from('areas').select(AREA_COLUMNS).eq('id', input.id).maybeSingle();
+        if (found.error) return failFrom(found.error, found.status);
+        if (!found.data) return fail('NOT_FOUND', 'Área não encontrada.');
+        row = found.data;
+      }
+      const all = await sb.from('areas').select('slug, ordem');
+      if (all.error) return failFrom(all.error, all.status);
+      const picked = pickArea(input);
+      const slug = row ? row.slug : (picked.slug || areaSlug(picked.nome ?? '', all.data.map((a) => a.slug)));
+      const next = {
+        descricao: null, icone: null, cor: DEFAULT_AREA_COLOR, nivel_minimo: 1, status: 'ativa', discord_role_id: null, discord_canal_id: null,
+        ordem: Math.max(0, ...all.data.map((a) => a.ordem)) + 1, ...(row ? pickArea(row) : {}), ...picked, slug,
+      };
+      const { valid, errors } = validateArea(next);
+      if (!valid) return validation(errors);
+      const table = sb.from('areas');
+      const { slug: _slug, ...changes } = next;
+      const { data, error, status } = row
+        ? await table.update(changes).eq('id', row.id).select(AREA_COLUMNS).maybeSingle()
+        : await table.insert(next).select(AREA_COLUMNS).single();
+      if (error) return error.code === '23505' ? validation({ slug: AREA_MANAGE_ERRORS.slugTaken }) : failFrom(error, status);
+      return data ? ok({ ...data, papel: null }) : fail('FORBIDDEN');
+    },
+
+    async reorderAreas(ids = []) {
+      const { error: g } = await guard('areas.gerenciar');
+      if (g) return g;
+      for (const [i, id] of ids.entries()) {
+        const { error, status } = await sb.from('areas').update({ ordem: i + 1 }).eq('id', id).neq('ordem', i + 1);
+        if (error) return failFrom(error, status);
+      }
+      return ok(null);
+    },
+
+    async deleteArea(id) {
+      const { error: g } = await guard('areas.gerenciar');
+      if (g) return g;
+      const { data, error, status } = await sb.from('areas').delete().eq('id', id).select('id');
+      if (error) return failFrom(error, status);
+      return data?.length ? ok(null) : fail('NOT_FOUND', 'Área não encontrada.');
+    },
+
+    async addAreaMember(areaId, discordId, papel = 'membro') {
+      const { error: g } = await guard('areas.gerenciar');
+      if (g) return g;
+      if (!AREA_ROLES.includes(papel)) return validation({ papel: AREA_MANAGE_ERRORS.role });
+      if (!AREA_DISCORD_ID.test(String(discordId))) return validation({ discord_id: AREA_MANAGE_ERRORS.member });
+      const { error, status } = await sb.from('areas_membros').insert({ area_id: areaId, discord_id: discordId, papel });
+      if (error?.code === '23505') return validation({ _: AREA_MANAGE_ERRORS.alreadyMember });
+      if (error?.code === '23503') return validation({ discord_id: AREA_MANAGE_ERRORS.member });
+      return error ? failFrom(error, status) : ok(null);
+    },
+
+    async setAreaMemberRole(areaId, discordId, papel) {
+      const { error: g } = await guard('areas.gerenciar');
+      if (g) return g;
+      if (!AREA_ROLES.includes(papel)) return validation({ papel: AREA_MANAGE_ERRORS.role });
+      const { data, error, status } = await sb.from('areas_membros').update({ papel }).eq('area_id', areaId).eq('discord_id', discordId).select('discord_id');
+      if (error) return failFrom(error, status);
+      return data?.length ? ok(null) : fail('NOT_FOUND', 'Membro não encontrado nesta área.');
+    },
+
+    async removeAreaMember(areaId, discordId) {
+      const { error: g } = await guard('areas.gerenciar');
+      if (g) return g;
+      const { data, error, status } = await sb.from('areas_membros').delete().eq('area_id', areaId).eq('discord_id', discordId).select('discord_id');
+      if (error) return failFrom(error, status);
+      return data?.length ? ok(null) : fail('NOT_FOUND', 'Membro não encontrado nesta área.');
+    },
+
+    async listMembersWithoutArea() {
+      const { error: g } = await guard('areas.gerenciar');
+      if (g) return g;
+      const { data, error, status } = await sb.rpc('membros_sem_area');
+      return error ? failFrom(error, status) : ok(data);
+    },
+
+    async saveAreaTag(areaId, input = {}) {
+      const { error: g } = await guard('areas.gerenciar');
+      if (g) return g;
+      let row = null;
+      if (input.id) {
+        const found = await sb.from('areas_tags').select(AREA_TAG_COLUMNS).eq('id', input.id).eq('area_id', areaId).maybeSingle();
+        if (found.error) return failFrom(found.error, found.status);
+        if (!found.data) return fail('NOT_FOUND', 'Tag não encontrada.');
+        row = found.data;
+      }
+      const next = { nome: '', cor: DEFAULT_TAG_COLOR, discord_role_id: null, ...(row ? pickAreaTag(row) : {}), ...pickAreaTag(input) };
+      const { valid, errors } = validateAreaTag(next);
+      if (!valid) return validation(errors);
+      const table = sb.from('areas_tags');
+      const { data, error, status } = row
+        ? await table.update(next).eq('id', row.id).select(AREA_TAG_COLUMNS).maybeSingle()
+        : await table.insert({ ...next, area_id: areaId }).select(AREA_TAG_COLUMNS).single();
+      if (error) return error.code === '23505' ? validation({ nome: AREA_MANAGE_ERRORS.tagTaken }) : failFrom(error, status);
+      return data ? ok(data) : fail('FORBIDDEN');
+    },
+
+    async deleteAreaTag(id) {
+      const { error: g } = await guard('areas.gerenciar');
+      if (g) return g;
+      // O banco recusa procedimento com tag que não existe mais: tira a tag deles antes de apagar.
+      const used = await sb.from('areas_procedimentos').select('id, tags').contains('tags', [id]);
+      if (used.error) return failFrom(used.error, used.status);
+      for (const p of used.data) {
+        const { error, status } = await sb.from('areas_procedimentos').update({ tags: p.tags.filter((t) => t !== id) }).eq('id', p.id);
+        if (error) return error.code === 'KB422' ? validation({ _: error.message }) : failFrom(error, status);
+      }
+      const { data, error, status } = await sb.from('areas_tags').delete().eq('id', id).select('id');
+      if (error) return failFrom(error, status);
+      return data?.length ? ok(null) : fail('NOT_FOUND', 'Tag não encontrada.');
+    },
+
+    async listAllAreaHistory({ areaId = '', actorId = '', acao = '', from = '', to = '', limit = 20, offset = 0 } = {}) {
+      const { error: g } = await guard('areas.gerenciar');
+      if (g) return g;
+      const { start, end } = historyRange({ from, to });
+      let q = sb.from('areas_historico').select(AREA_HISTORY_COLUMNS, { count: 'exact' });
+      if (areaId) q = q.eq('area_id', areaId);
+      if (actorId) q = q.eq('ator_id', actorId);
+      if (acao) q = q.eq('acao', acao);
+      if (start) q = q.gte('criado_em', start);
+      if (end) q = q.lt('criado_em', end);
+      const { data, error, status, count } = await q.order('id', { ascending: false }).range(offset, offset + limit - 1);
+      if (error) return failFrom(error, status);
+      await loadNames();
+      return ok({ items: data.map((e) => ({ ...e, ator_nome: nameOf(e.ator_id) })), total: count ?? data.length });
+    },
+
+    /* ----- Áreas: mensagens no Discord pela Edge Function (ação 'area'; plano 07, Fase 4) ----- */
+    async sendAreaMessage(areaId, { tipo, conteudo, canal_id = '', user_ids = [], mencionar_cargo = false, link_call = '' } = {}) {
+      const { error: g } = await guard('areas.gerenciar');
+      if (g) return g;
+      const check = validateAreaMessage({ kind: tipo, conteudo, canal_id, user_ids, link_call });
+      if (!check.valid) return validation(check.errors);
+      const res = await invokeSend({
+        action: 'area', kind: tipo, area_id: areaId, conteudo, canal_id: String(canal_id).trim() || null, user_ids,
+        mencionar_cargo: mencionar_cargo === true, link_call: String(link_call).trim() || null,
+      });
+      // A função antiga (antes das Áreas) não conhece a ação 'area'.
+      if (res.error?.message === 'Ação desconhecida.') return fail('NETWORK', AREA_DISCORD_ERRORS.outdatedFunction);
+      return res;
     },
 
     /* ----- Botões da Agenda: status (18_agenda_status.sql) e avisos no Discord (Edge Function, ação 'reuniao') ----- */

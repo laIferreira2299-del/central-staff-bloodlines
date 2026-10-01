@@ -779,6 +779,123 @@ export function meetingDmSummary({ sent = 0, failed = [] } = {}) {
   return `Privado: ${sent} de ${total} receberam.${failed.length ? ` Não receberam: ${failed.join(', ')}.` : ''}`;
 }
 
+/* ======================= Áreas da Staff no Discord (plano 07, Fase 4) ======================= */
+/** Tipos de envio: canal (o bot posta no canal), dm (privado de cada um) e alinhamento (canal marcando as pessoas, com a call). */
+export const AREA_MESSAGE_KINDS = Object.freeze(['canal', 'dm', 'alinhamento']);
+export const AREA_MESSAGE_MAX = 2000;
+export const AREA_MAX_RECIPIENTS = 100;
+/** Marcações pessoais no canal: o Discord limita o texto a 2000 caracteres e cada marcação ocupa cerca de 22. */
+export const AREA_MAX_MENTIONS = 60;
+export const AREA_DM_CLOSED_CODE = 50007;
+export const AREA_DISCORD_ERRORS = Object.freeze({
+  forbidden: 'Seu cargo não permite enviar mensagens pelas Áreas.',
+  areaNotFound: 'Área não encontrada.',
+  archived: 'Esta área está arquivada: só leitura.',
+  kind: 'Tipo de mensagem desconhecido.',
+  content: 'Escreva a mensagem.',
+  contentMax: `A mensagem pode ter até ${AREA_MESSAGE_MAX} caracteres.`,
+  channelId: 'ID do canal: só números, de 17 a 20 dígitos.',
+  noChannel: 'Esta área não tem canal do Discord. Informe o ID do canal.',
+  noRole: 'Esta área não tem cargo do Discord cadastrado para marcar.',
+  callLink: 'Link da call: use um endereço discord.gg ou discord.com/channels.',
+  userIds: 'Destinatários: Discord ID de 17 a 20 dígitos.',
+  tooMany: `Até ${AREA_MAX_RECIPIENTS} pessoas por envio.`,
+  tooManyMentions: `Para chamar mais de ${AREA_MAX_MENTIONS} pessoas no canal, marque o cargo da área.`,
+  notMembers: 'Só é possível enviar para membros ativos da área.',
+  noRecipients: 'Esta área não tem membros ativos para receber.',
+  dmClosed: 'DMs fechadas',
+  channel: (status) => `O Discord recusou o envio no canal (HTTP ${status}). Confira o ID do canal e se o bot pode enviar mensagens nele.`,
+  outdatedFunction: 'A função enviar-discord instalada no Supabase é de uma versão antiga e ainda não envia mensagens das Áreas. Avise a administração para colar o arquivo novo (supabase/functions/enviar-discord/index.ts) e clicar Deploy.',
+});
+/** acao gravada em areas_historico (entidade "comunicacao"). */
+export const AREA_HISTORY_ACTIONS = Object.freeze({ canal: 'enviou_canal', dm: 'enviou_dm', alinhamento: 'alinhamento' });
+
+/**
+ * Valida o pedido de mensagem de uma área (mesmas regras no site, no mock e na Edge Function).
+ * @param {{ kind?: string, conteudo?: string, canal_id?: string, user_ids?: string[], link_call?: string }} m
+ * @returns {{ valid: boolean, errors: Record<string, string> }}
+ */
+export function validateAreaMessage(m = {}) {
+  const errors = {};
+  const text = String(m.conteudo ?? '').trim();
+  if (!AREA_MESSAGE_KINDS.includes(m.kind)) errors.kind = AREA_DISCORD_ERRORS.kind;
+  if (!text) errors.conteudo = AREA_DISCORD_ERRORS.content;
+  else if (text.length > AREA_MESSAGE_MAX) errors.conteudo = AREA_DISCORD_ERRORS.contentMax;
+  else if (hasEmoji(text)) errors.conteudo = NO_EMOJI_MESSAGE;
+  if (clean(m.canal_id) && !DISCORD_ID.test(clean(m.canal_id))) errors.canal_id = AREA_DISCORD_ERRORS.channelId;
+  if (clean(m.link_call) && !MEETING_LINK.test(clean(m.link_call))) errors.link_call = AREA_DISCORD_ERRORS.callLink;
+  const ids = Array.isArray(m.user_ids) ? m.user_ids : [];
+  if (ids.length > AREA_MAX_RECIPIENTS) errors.user_ids = AREA_DISCORD_ERRORS.tooMany;
+  else if (ids.some((id) => !DISCORD_ID.test(String(id)))) errors.user_ids = AREA_DISCORD_ERRORS.userIds;
+  return { valid: Object.keys(errors).length === 0, errors };
+}
+
+/**
+ * Quem recebe: os pedidos que são membros ativos da área (sem repetir). Pedido vazio = a equipe toda.
+ * `unknown` lista o que foi pedido e não é membro ativo (a função recusa o envio nesse caso).
+ * @param {string[]} requestedIds
+ * @param {Array<{ discord_id: string, display_name?: string }>} members membros ATIVOS da área
+ */
+export function areaRecipients(requestedIds = [], members = []) {
+  const ids = [...new Set(requestedIds.map(String))];
+  if (!ids.length) return { recipients: [...members], unknown: [] };
+  const byId = new Map(members.map((m) => [m.discord_id, m]));
+  return { recipients: ids.filter((id) => byId.has(id)).map((id) => byId.get(id)), unknown: ids.filter((id) => !byId.has(id)) };
+}
+
+/** Cor da área (#RRGGBB) como número do Discord; cor inválida = vermelho do site. */
+export const areaColor = (hex) => (/^#[0-9a-fA-F]{6}$/.test(String(hex)) ? parseInt(String(hex).slice(1), 16) : 0x8B0000);
+
+/** Card da mensagem (canal e privado usam o mesmo desenho). */
+export function areaEmbed(area, { kind = 'canal', conteudo = '', senderName = '', linkCall = '', now = new Date() } = {}) {
+  const call = MEETING_LINK.test(clean(linkCall)) ? clean(linkCall) : '';
+  const fields = [];
+  if (clean(senderName)) fields.push({ name: '✎ Enviado por', value: clean(senderName).slice(0, 256), inline: true });
+  if (call) fields.push({ name: '✆ Call no Discord', value: call, inline: false });
+  return {
+    title: `${kind === 'alinhamento' ? 'Alinhamento' : 'Mensagem'}: ${clean(area.nome)}`.slice(0, 256),
+    description: clean(conteudo).slice(0, AREA_MESSAGE_MAX),
+    ...(call ? { url: call } : {}),
+    color: areaColor(area.cor),
+    ...(fields.length ? { fields } : {}),
+    timestamp: new Date(now).toISOString(),
+    footer: { text: 'Bloodlines RP · Áreas da Staff' },
+  };
+}
+
+/**
+ * Mensagem para o canal (kind "canal" ou "alinhamento"). Marca só o que foi pedido: o cargo da área
+ * (mentionRoleId) e, no alinhamento, as pessoas (mentionUserIds). Nunca @everyone nem @here.
+ * @param {{ nome: string, cor?: string }} area
+ */
+export function buildAreaChannelMessage(area, { kind = 'canal', mentionRoleId = '', mentionUserIds = [], ...opts } = {}) {
+  const role = DISCORD_ID.test(clean(mentionRoleId)) ? clean(mentionRoleId) : '';
+  const users = kind === 'alinhamento' ? [...new Set(mentionUserIds.filter((id) => DISCORD_ID.test(String(id))))] : [];
+  const mentions = [...(role ? [`<@&${role}>`] : []), ...users.map((id) => `<@${id}>`)];
+  return {
+    ...(mentions.length ? { content: mentions.join(' ') } : {}),
+    allowed_mentions: { parse: [], ...(role ? { roles: [role] } : {}), ...(users.length ? { users } : {}) },
+    embeds: [areaEmbed(area, { ...opts, kind })],
+  };
+}
+
+/** Mensagem do bot no privado: o mesmo card, sem marcar ninguém. */
+export const buildAreaDm = (area, opts = {}) => ({
+  content: `Mensagem da área ${clean(area.nome)}:`.slice(0, 200),
+  allowed_mentions: { parse: [] },
+  embeds: [areaEmbed(area, { ...opts, kind: 'dm' })],
+});
+
+/** Motivo curto da falha de um privado (só o código do Discord, nunca o texto interno dele). */
+export const areaDmReason = (code, status) => (Number(code) === AREA_DM_CLOSED_CODE
+  ? AREA_DISCORD_ERRORS.dmClosed : `Discord ${status ?? '?'}${code ? `:${code}` : ''}`);
+
+/** Resumo do envio para a tela: "3 enviadas, 1 falhou". */
+export function areaSendSummary({ enviados = 0, falhas = 0 } = {}) {
+  if (!enviados && !falhas) return 'Nada foi enviado.';
+  return `${enviados} ${enviados === 1 ? 'enviada' : 'enviadas'}${falhas ? `, ${falhas} ${falhas === 1 ? 'falhou' : 'falharam'}` : ''}.`;
+}
+
 export const DISCORD_ROLE_ID_ERROR = 'ID do cargo: só números, de 17 a 20 dígitos.';
 /** Valida { cargo: id } (vazio = sem marcação para aquele cargo). */
 export function validateDiscordRoleIds(map = {}) {

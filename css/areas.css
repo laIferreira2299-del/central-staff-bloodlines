@@ -1,0 +1,136 @@
+/* Áreas da Staff (plano 07): estilos exclusivos das telas #/areas e #/areas/<slug>.
+   Usa só os tokens do site (css/tokens.css); não muda nenhum estilo existente. */
+
+.areas-page { max-width: var(--content-max); }
+.areas-head { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: flex-start; justify-content: space-between; }
+
+.areas-warning {
+  display: flex; gap: var(--space-2); align-items: center;
+  margin: var(--space-4) 0; padding: var(--space-3) var(--space-4);
+  background: var(--accent-bg); border: 1px solid var(--accent); border-radius: var(--radius);
+  color: var(--text); font-size: var(--fs-sm); font-weight: 600;
+}
+.areas-warning[hidden] { display: none; }
+.areas-readonly { margin: var(--space-3) 0; color: var(--warn); }
+
+.areas-grid { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); margin-top: var(--space-4); }
+.areas-card {
+  display: flex; gap: var(--space-3); align-items: flex-start;
+  padding: var(--space-4);
+  background: var(--surface-1); border: 1px solid var(--border); border-left: 4px solid var(--area-cor, var(--accent)); border-radius: var(--radius);
+  color: var(--text); text-decoration: none;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.areas-card:hover { border-color: var(--area-cor, var(--accent)); background: var(--surface-2); }
+.areas-card:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.areas-card-icon {
+  display: inline-grid; place-items: center; flex: none; width: 40px; height: 40px;
+  border-radius: var(--radius-sm); background: var(--surface-3); color: var(--area-cor, var(--accent-text)); font-size: 1.3rem;
+}
+.areas-card-body { display: grid; gap: var(--space-1); min-width: 0; }
+.areas-card-name { font-family: var(--font-title); font-size: var(--fs-lg); overflow-wrap: anywhere; }
+.areas-card-desc { font-size: var(--fs-sm); color: var(--text-2); overflow-wrap: anywhere; }
+.areas-card-meta { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); font-size: var(--fs-xs); color: var(--text-2); }
+.areas-empty { margin-top: var(--space-4); }
+
+.areas-chip {
+  display: inline-block; padding: 1px var(--space-2);
+  background: var(--accent-bg); border: 1px solid var(--accent-border); border-radius: var(--radius-sm);
+  color: var(--text); font-size: var(--fs-xs); font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+}
+.areas-chip--muted { background: var(--neutral-bg); border-color: var(--border); color: var(--text-2); }
+.areas-tag {
+  display: inline-block; padding: 1px var(--space-2);
+  border: 1px solid var(--area-cor, var(--border)); border-radius: 999px;
+  color: var(--text); font-size: var(--fs-xs);
+}
+
+.areas-choose { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; min-width: min(480px, 80vw); }
+.areas-choose-row {
+  display: flex; gap: var(--space-3); align-items: center;
+  padding: var(--space-3); background: var(--surface-2); border: 1px solid var(--border); border-left: 4px solid var(--area-cor, var(--accent)); border-radius: var(--radius-sm);
+}
+.areas-choose-info { display: grid; flex: 1; min-width: 0; gap: 2px; }
+
+.areas-area-head { display: grid; gap: var(--space-3); }
+.areas-title-row { display: flex; gap: var(--space-4); align-items: center; }
+.areas-tabs { display: flex; flex-wrap: wrap; gap: var(--space-1); margin: var(--space-4) 0; border-bottom: 1px solid var(--border); }
+.areas-tab {
+  padding: var(--space-2) var(--space-4); background: transparent; border: 0; border-bottom: 2px solid transparent;
+  color: var(--text-2); font: inherit; font-size: var(--fs-sm); font-weight: 600; cursor: pointer;
+}
+.areas-tab:hover { color: var(--text); }
+.areas-tab:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.areas-tab[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--text); }
+
+.areas-toolbar { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4); }
+.areas-toolbar .input { flex: 1 1 180px; min-width: 0; }
+.areas-list { display: grid; gap: var(--space-3); }
+.areas-proc { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); }
+.areas-proc[open] { border-color: var(--accent-border); }
+.areas-proc > summary {
+  display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; padding: var(--space-3) var(--space-4); cursor: pointer;
+}
+.areas-proc > summary:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.areas-proc-title { flex: 1 1 200px; font-weight: 600; overflow-wrap: anywhere; }
+.areas-proc-body, .areas-proc-meta, .areas-proc-actions { margin: 0; padding: 0 var(--space-4) var(--space-3); }
+.areas-proc-meta { font-size: var(--fs-xs); color: var(--text-2); }
+.areas-proc-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+.areas-editor { display: grid; gap: var(--space-4); max-width: var(--reading-max); }
+.areas-editor-title { font-family: var(--font-title); font-size: var(--fs-xl); }
+.areas-editor-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; }
+.areas-preview { padding: var(--space-4); background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); }
+.areas-preview[hidden], .areas-editor [hidden] { display: none; }
+.areas-tagbox { display: flex; flex-wrap: wrap; gap: var(--space-3); margin: 0; padding: 0; border: 0; }
+.areas-tagpick { display: inline-flex; gap: var(--space-1); align-items: center; font-size: var(--fs-sm); }
+
+.areas-team, .areas-history, .areas-mini { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.areas-team-row {
+  display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); align-items: center;
+  padding: var(--space-3) var(--space-4); background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.areas-team-row strong { flex: 1 1 160px; }
+
+.areas-stats { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); margin-bottom: var(--space-6); }
+.areas-stat { display: grid; gap: var(--space-1); padding: var(--space-4); background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); }
+.areas-stat-value { font-family: var(--font-title); font-size: var(--fs-2xl); line-height: 1; }
+.areas-stat-label { font-size: var(--fs-xs); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-2); }
+.areas-block { margin-bottom: var(--space-6); }
+.areas-block-title { margin-bottom: var(--space-3); font-family: var(--font-title); font-size: var(--fs-lg); color: var(--accent-text); }
+
+.areas-history-row { padding: var(--space-3) var(--space-4); background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.areas-history-row p { margin: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.areas-diff { margin-top: var(--space-2); font-size: var(--fs-xs); color: var(--text-2); }
+.areas-diff pre { overflow-x: auto; margin: var(--space-2) 0 0; padding: var(--space-3); background: var(--bg); border-radius: var(--radius-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.areas-pager { display: flex; gap: var(--space-4); align-items: center; justify-content: center; margin-top: var(--space-4); }
+
+/* Bolinha no menu: quem ainda não escolheu nenhuma área. */
+.areas-dot { display: inline-block; width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--accent-text); box-shadow: 0 0 0 2px var(--accent-bg); }
+
+/* Painel de gestão (#/areas/gerenciar) */
+.areas-admin-list { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+.areas-admin-row {
+  display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-4); align-items: center;
+  padding: var(--space-4); background: var(--surface-1); border: 1px solid var(--border); border-left: 4px solid var(--area-cor, var(--accent)); border-radius: var(--radius);
+}
+.areas-admin-info { display: grid; flex: 1 1 260px; gap: var(--space-1); min-width: 0; }
+.areas-admin-name { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; font-size: var(--fs-lg); overflow-wrap: anywhere; }
+.areas-admin-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.areas-picker { display: grid; gap: var(--space-1); max-width: 360px; margin-bottom: var(--space-4); }
+.areas-add { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; margin-top: var(--space-3); }
+.areas-add .input { flex: 1 1 200px; min-width: 0; }
+.areas-add .field-error { flex: 1 1 100%; margin: 0; }
+.areas-inline-select { flex: 0 1 180px; min-width: 0; }
+.areas-color { width: 64px; min-height: 40px; padding: 2px; cursor: pointer; }
+.areas-confirm { display: grid; gap: var(--space-3); min-width: min(440px, 80vw); }
+.areas-confirm p { margin: 0; }
+.areas-filters .input { flex: 1 1 160px; }
+.areas-tag-form { margin-bottom: var(--space-4); }
+
+@media (max-width: 600px) {
+  .areas-grid { grid-template-columns: 1fr; }
+  .areas-title-row { align-items: flex-start; }
+  .areas-editor-actions .btn { flex: 1 1 100%; }
+  .areas-admin-actions .btn { flex: 1 1 auto; }
+}
