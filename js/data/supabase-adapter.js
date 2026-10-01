@@ -18,8 +18,7 @@ import {
 } from '../core/lore.js';
 import { PRODUCTIVITY_ERRORS } from '../core/productivity.js';
 import { RULE_ERRORS, pickRule, validateRule } from '../core/rules.js';
-import { pickMeeting, validateMeeting } from '../core/agenda.js';
-import { ROLE_LABELS } from '../core/permissions.js';
+import { CONFLICT_PREFIX, participantLabel, pickMeeting, validateMeeting } from '../core/agenda.js';
 import {
   PROPOSAL_ERRORS, PROPOSAL_NOTE_MAX, proposalStatus, validateAnnouncement, validateEvaluation,
 } from '../core/workflow.js';
@@ -206,7 +205,7 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
   }
   const presentMeeting = ({ meeting_participants: list, ...m }) => ({
     ...m,
-    participants: (list ?? []).map((p) => ({ kind: p.kind, value: p.value, label: p.kind === 'role' ? ROLE_LABELS[p.value] ?? p.value : nameOf(p.value) ?? 'Membro removido' })),
+    participants: (list ?? []).map((p) => ({ kind: p.kind, value: p.value, label: participantLabel(p, nameOf) })),
     created_by_name: nameOf(m.created_by), updated_by_name: nameOf(m.updated_by),
   });
   const presentRule = (r) => ({ ...r, created_by_name: nameOf(r.created_by), updated_by_name: nameOf(r.updated_by) });
@@ -1185,28 +1184,32 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       const next = { participants: [], ...(current ? pickMeeting(current) : {}), ...pickMeeting(input) };
       const { valid, errors } = validateMeeting(next);
       if (!valid) return validation(errors);
-      const { participants, ...fields } = { ...next, starts_at: new Date(next.starts_at).toISOString() };
-      const q = current ? sb.from('meetings').update(fields).eq('id', current.id) : sb.from('meetings').insert(fields);
-      const { data: row, error, status } = await q.select('id').maybeSingle();
-      if (error) return failFrom(error, status);
-      if (!row) return fail('NOT_FOUND', 'Reunião não encontrada.');
-      // Convocados: grava os novos primeiro e só depois tira os que saíram (um erro no meio não apaga a lista antiga).
-      const key = (p) => `${p.kind}:${p.value}`;
-      const have = new Set((current?.participants ?? []).map(key));
-      const want = new Set(participants.map(key));
-      const added = participants.filter((p) => !have.has(key(p)));
-      if (added.length) {
-        const ins = await sb.from('meeting_participants').insert(added.map((p) => ({ meeting_id: row.id, kind: p.kind, value: p.value })));
-        if (ins.error) return failFrom(ins.error, ins.status);
+      // Uma transação só no banco (save_meeting): reunião e convocados juntos; conflito de horário não grava nada.
+      const { data: id, error, status } = await sb.rpc('save_meeting', {
+        p_id: current?.id ?? null, p_title: next.title, p_description: next.description ?? null,
+        p_starts_at: new Date(next.starts_at).toISOString(), p_discord_link: next.discord_link ?? null, p_participants: next.participants,
+      });
+      if (error) {
+        if (error.code === 'KB422' && String(error.message).startsWith(CONFLICT_PREFIX)) return validation({ starts_at: error.message });
+        return error.code === 'KB404' ? fail('NOT_FOUND', 'Reunião não encontrada.') : failFrom(error, status);
       }
-      for (const p of (current?.participants ?? []).filter((x) => !want.has(key(x)))) {
-        const del = await sb.from('meeting_participants').delete().eq('meeting_id', row.id).eq('kind', p.kind).eq('value', p.value);
-        if (del.error) return failFrom(del.error, del.status);
-      }
+      const row = { id };
       const { data, error: e2, status: s2 } = await sb.from('meetings').select(MEETING_COLUMNS).eq('id', row.id).maybeSingle();
       if (e2) return failFrom(e2, s2);
       await loadNames();
       return ok(presentMeeting(data));
+    },
+
+    async checkMeetingConflict(input = {}) {
+      const { error: g } = await guard('agenda.gerenciar');
+      if (g) return g;
+      const next = pickMeeting(input);
+      if (!next.starts_at || Number.isNaN(Date.parse(next.starts_at))) return ok(null);
+      const { data, error, status } = await sb.rpc('check_meeting_conflict', {
+        p_id: input.id ?? null, p_starts_at: new Date(next.starts_at).toISOString(), p_participants: next.participants ?? [],
+      });
+      if (error) return failFrom(error, status);
+      return ok(data ?? null);
     },
 
     async deleteMeeting(id) {

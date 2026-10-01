@@ -2,15 +2,15 @@
 // Mensagens das travas IGUAIS às do SQL (tests/db/banco.test.mjs confere).
 // Horário sempre de Brasília (UTC-3, sem horário de verão desde 2019), igual para toda a staff.
 import { NO_EMOJI_MESSAGE, hasEmoji } from './workflow.js';
-import { ROLE_CODES } from './permissions.js';
+import { ROLE_CODES, ROLE_LABELS, TEAMS, TEAM_LABELS } from './permissions.js';
 
 export const MEETING_LIMITS = Object.freeze({ title: 150, description: 2000, link: 300, participants: 100 });
 
 /** Campos que o cliente pode definir numa reunião (o resto é do servidor). */
 export const MEETING_FIELDS = Object.freeze(['title', 'description', 'starts_at', 'discord_link', 'participants']);
 
-/** Tipos de convocado: cargo inteiro ou membro específico (Discord ID). */
-export const PARTICIPANT_KINDS = Object.freeze(['role', 'member']);
+/** Tipos de convocado: cargo inteiro, tag de equipe (Allowlist ou Lore) ou membro específico (Discord ID). */
+export const PARTICIPANT_KINDS = Object.freeze(['role', 'team', 'member']);
 
 export const MEETING_FIELD_ERRORS = Object.freeze({
   required: 'Campo obrigatório.',
@@ -19,6 +19,13 @@ export const MEETING_FIELD_ERRORS = Object.freeze({
   link: 'O link deve começar com https://discord.gg/, https://discord.com/channels/ ou https://discord.com/invite/.',
   participants: 'Lista de convocados inválida.',
 });
+
+/**
+ * Conflito de horário: mesmo dia e minuto com convocados em comum. IGUAL à mensagem de supabase/17_agenda.sql
+ * (kb_meeting_conflict_message); tests/db/banco.test.mjs confere.
+ */
+export const meetingConflictMessage = (title) => `Conflito de horário: já existe a reunião "${title}" neste horário com convocados em comum (mesmo cargo, tag ou membro). Mude o horário ou os convocados.`;
+export const CONFLICT_PREFIX = 'Conflito de horário: ';
 
 /** Mesma expressão do CHECK de supabase/17_agenda.sql. */
 export const DISCORD_LINK_PATTERN = /^https:\/\/(discord\.gg\/|discord\.com\/(channels|invite)\/)[^\s]+$/;
@@ -36,7 +43,7 @@ function text(errors, field, value, max, { required = false } = {}) {
 }
 
 const validParticipant = (p) => p && typeof p === 'object'
-  && ((p.kind === 'role' && ROLE_CODES.includes(p.value)) || (p.kind === 'member' && DISCORD_ID.test(String(p.value))));
+  && ((p.kind === 'role' && ROLE_CODES.includes(p.value)) || (p.kind === 'team' && TEAMS.includes(p.value)) || (p.kind === 'member' && DISCORD_ID.test(String(p.value))));
 
 /** @returns {{ valid: boolean, errors: Record<string, string> }} */
 export function validateMeeting(m = {}) {
@@ -78,6 +85,37 @@ export function pickMeeting(data = {}) {
     else out[f] = clean(src[f]);
   }
   return out;
+}
+
+/** Texto do convocado: nome do cargo, nome da equipe ou nome do membro (`nameOf` devolve null se a pessoa não existe mais). */
+export function participantLabel(p, nameOf = () => null) {
+  if (p.kind === 'role') return ROLE_LABELS[p.value] ?? p.value;
+  if (p.kind === 'team') return TEAM_LABELS[p.value] ?? p.value;
+  return nameOf(p.value) ?? 'Membro removido';
+}
+
+const minuteOf = (iso) => Math.floor(new Date(iso).getTime() / 60000);
+
+/** Discord IDs dos membros ativos alcançados por uma lista de convocados (cargo, tag ou o próprio membro). */
+export function audienceOf(participants, staff) {
+  const list = Array.isArray(participants) ? participants : [];
+  return new Set(staff.filter((s) => s.active && list.some((p) => (p.kind === 'role' && p.value === s.role)
+    || (p.kind === 'team' && (s.teams ?? []).includes(p.value)) || (p.kind === 'member' && p.value === s.discord_id))).map((s) => s.discord_id));
+}
+
+/**
+ * Primeira outra reunião no mesmo dia e minuto com algum convocado em comum (ou null): o mesmo cargo, tag ou membro
+ * convocado nas duas, ou alguém ativo alcançado pelas duas (ex.: membro que pertence ao cargo convocado na outra).
+ * Mesma conta do banco (kb_meeting_conflict_for). `staff`: { discord_id, role, teams, active }.
+ */
+export function findMeetingConflict(candidate, meetings, staff) {
+  if (!candidate?.starts_at || Number.isNaN(Date.parse(candidate.starts_at))) return null;
+  const mine = audienceOf(candidate.participants, staff);
+  const keys = new Set((candidate.participants ?? []).map((p) => `${p.kind}:${p.value}`));
+  const sameTime = meetings.filter((o) => o.id !== candidate.id && minuteOf(o.starts_at) === minuteOf(candidate.starts_at));
+  return sortMeetings(sameTime).sort((a, b) => a.title.localeCompare(b.title, 'pt-BR'))
+    .find((o) => (o.participants ?? []).some((p) => keys.has(`${p.kind}:${p.value}`))
+      || [...audienceOf(o.participants, staff)].some((id) => mine.has(id))) ?? null;
 }
 
 /** A reunião está "ao vivo" (de 30 min antes a 30 min depois do horário). */

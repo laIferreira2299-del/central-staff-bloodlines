@@ -294,6 +294,9 @@
  * @property {(m: object) => Result<Meeting>} saveMeeting    agenda.gerenciar. Cria (sem id) ou edita; `participants`
  *           ({ kind: 'role'|'member', value }) substitui a lista de convocados. Erros de campo = VALIDATION em details.errors.
  * @property {(id: string) => Result<null>} deleteMeeting    agenda.gerenciar. NOT_FOUND se não existe.
+ * @property {(m: object) => Result<string|null>} checkMeetingConflict    agenda.gerenciar. Título da outra reunião no mesmo dia e minuto
+ *           com convocados em comum (cargo, tag ou membro), ou null. `m`: { id?, starts_at, participants }. saveMeeting recusa
+ *           o mesmo caso: VALIDATION em details.errors.starts_at (meetingConflictMessage).
  *
  * Etapa 10 · produtividade (13_produtividade.sql; conta em js/core/productivity.js)
  * @property {(p: { from: string, to: string }) => Result<Productivity>} getProductivity   produtividade.ver. to exclusivo.
@@ -329,7 +332,7 @@ export const ADAPTER_METHODS = Object.freeze([
   'saveInterviewQuestion', 'saveChecklistItem', 'saveBlockedName',
   'listCharacters', 'getCharacter', 'saveCharacter', 'setCharacterPhoto', 'addCharacterNote', 'deleteCharacterNote',
   'listRules', 'saveRule', 'deleteRule',
-  'listMeetings', 'saveMeeting', 'deleteMeeting',
+  'listMeetings', 'saveMeeting', 'deleteMeeting', 'checkMeetingConflict',
   'getProductivity', 'listStaffNames',
 ]);
 

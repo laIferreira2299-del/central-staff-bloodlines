@@ -3,9 +3,9 @@
 import { h, icon, toast } from '../dom.js';
 import { confirmDialog } from '../modal.js';
 import {
-  DISCORD_LINK_PATTERN, MEETING_LIMITS, filterMeetings, formatMeetingDate, fromInputValue, isLive, toInputValue,
+  DISCORD_LINK_PATTERN, MEETING_LIMITS, filterMeetings, formatMeetingDate, fromInputValue, isLive, meetingConflictMessage, toInputValue,
 } from '../../core/agenda.js';
-import { ROLE_LIST } from '../../core/permissions.js';
+import { ROLE_LIST, TEAMS, TEAM_LABELS } from '../../core/permissions.js';
 import { formField, showFieldErrors } from './gabarito.js';
 import { renderMessage } from './message.js';
 
@@ -83,7 +83,7 @@ export function renderAgenda(app) {
           m.description && h('p', { class: 'agenda-desc' }, m.description),
           m.participants.length > 0 && h('ul', { class: 'agenda-people', 'aria-label': 'Convocados' },
             m.participants.map((p) => h('li', { class: `agenda-person agenda-person--${p.kind}` },
-              h('span', { class: 'agenda-person-kind' }, p.kind === 'role' ? 'Cargo' : 'Membro'), ' ', p.label))))),
+              h('span', { class: 'agenda-person-kind' }, p.kind === 'role' ? 'Cargo' : p.kind === 'team' ? 'Tag' : 'Membro'), ' ', p.label))))),
       (link || canManage) && h('div', { class: 'agenda-actions' },
         link && h('a', { class: 'btn btn--primary', href: link, target: '_blank', rel: 'noopener noreferrer' }, icon('brand-discord'), 'Entrar na call'),
         canManage && h('button', { type: 'button', class: 'btn btn--sm', 'aria-label': `Editar ${m.title}`, onclick: () => openForm(m) }, icon('pencil'), 'Editar'),
@@ -115,6 +115,8 @@ export function renderAgenda(app) {
         h('p', { class: 'field-hint' }, 'Marque cargos inteiros ou membros específicos.'),
         h('p', { class: 'agenda-fieldset-title' }, 'Cargos'),
         h('div', { class: 'agenda-checks', id: 'agenda-roles' }, ROLE_LIST.map((r) => checkbox('role', r.code, r.label))),
+        h('p', { class: 'agenda-fieldset-title' }, 'Tags de equipe'),
+        h('div', { class: 'agenda-checks', id: 'agenda-teams' }, TEAMS.map((t) => checkbox('team', t, TEAM_LABELS[t]))),
         h('p', { class: 'agenda-fieldset-title' }, 'Membros'),
         h('div', { class: 'agenda-checks', id: 'agenda-members' }, names.data.map((s) => checkbox('member', s.discord_id, s.display_name)))),
       peopleError);
@@ -127,13 +129,32 @@ export function renderAgenda(app) {
         h('button', { type: 'button', class: 'btn btn--ghost', id: 'agenda-cancel', onclick: drawList }, 'Cancelar'),
         h('button', { type: 'submit', class: 'btn btn--primary', id: 'agenda-save', 'data-requires-online': '' },
           icon('device-floppy'), meeting ? 'Salvar alterações' : 'Agendar reunião')));
+    const chosenParticipants = () => [...form.querySelectorAll('input[name="participant"]:checked')].map((i) => {
+      const [kind, ...rest] = i.value.split(':');
+      return { kind, value: rest.join(':') };
+    });
+    // Aviso na hora de escolher o horário ou os convocados: mesmo dia e minuto com gente em comum = conflito, e o botão trava.
+    let checkSeq = 0;
+    async function checkConflict() {
+      const seq = ++checkSeq;
+      const startsAt = fromInputValue(fields.starts_at.input.value);
+      const saveBtn = form.querySelector('#agenda-save');
+      let clash = null;
+      if (startsAt) {
+        const res = await app.adapter.checkMeetingConflict({ ...(meeting ? { id: meeting.id } : {}), starts_at: startsAt, participants: chosenParticipants() });
+        if (!alive || seq !== checkSeq) return;
+        clash = res.error ? null : res.data;
+      }
+      fields.starts_at.error.textContent = clash ? meetingConflictMessage(clash) : '';
+      fields.starts_at.error.hidden = !clash;
+      form.dataset.conflict = clash ? 'sim' : '';
+      saveBtn.disabled = Boolean(clash);
+    }
+    form.addEventListener('change', checkConflict);
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const startsAt = fromInputValue(fields.starts_at.input.value);
-      const participants = [...form.querySelectorAll('input[name="participant"]:checked')].map((i) => {
-        const [kind, ...rest] = i.value.split(':');
-        return { kind, value: rest.join(':') };
-      });
+      const participants = chosenParticipants();
       const res = await app.adapter.saveMeeting({
         ...(meeting ? { id: meeting.id } : {}),
         title: fields.title.input.value,
@@ -151,6 +172,7 @@ export function renderAgenda(app) {
     slot.replaceChildren(h('a', { class: 'back', href: '#/agenda', onclick: (e) => { e.preventDefault(); drawList(); } },
       icon('arrow-left'), 'Cancelar e voltar'), form);
     app.applyOnline();
+    checkConflict();
     fields.title.input.focus();
   }
 

@@ -18,8 +18,7 @@ import {
 } from '../core/lore.js';
 import { PRODUCTIVITY_ERRORS, aggregateProductivity } from '../core/productivity.js';
 import { RULE_ERRORS, pickRule, sortRules, validateRule } from '../core/rules.js';
-import { pickMeeting, sortMeetings, validateMeeting } from '../core/agenda.js';
-import { ROLE_LABELS } from '../core/permissions.js';
+import { findMeetingConflict, meetingConflictMessage, participantLabel, pickMeeting, sortMeetings, validateMeeting } from '../core/agenda.js';
 import {
   PROPOSAL_ERRORS, contentChanged, proposalStatus, EVALUATION_ERRORS, evaluationChangeError, validateEvaluation,
   isPeriodOpen, validateAnnouncement, isAnnouncementFor, PROPOSAL_NOTE_MAX,
@@ -294,7 +293,7 @@ export function createMockAdapter({
   const presentRule = (r) => ({ ...clone(r), created_by_name: nameOf(r.created_by), updated_by_name: nameOf(r.updated_by) });
   const presentMeeting = (m) => ({
     ...clone(m),
-    participants: m.participants.map((p) => ({ ...p, label: p.kind === 'role' ? ROLE_LABELS[p.value] ?? p.value : nameOf(p.value) ?? 'Membro removido' })),
+    participants: m.participants.map((p) => ({ ...p, label: participantLabel(p, nameOf) })),
     created_by_name: nameOf(m.created_by), updated_by_name: nameOf(m.updated_by),
   });
   const presentNote = (n) => ({ ...clone(n), created_by_name: nameOf(n.created_by) });
@@ -1319,12 +1318,23 @@ export function createMockAdapter({
         const { valid, errors } = validateMeeting(next);
         if (!valid) return validationError(errors);
         const fields = { ...next, starts_at: new Date(next.starts_at).toISOString() };
+        const clash = findMeetingConflict({ id: row?.id, ...fields }, state.meetings, state.staff);
+        if (clash) return validationError({ starts_at: meetingConflictMessage(clash.title) });
         const at = nowIso();
         if (row) Object.assign(row, fields, { updated_by: staff.discord_id, updated_at: at });
         const saved = row ?? { id: uuid(), ...fields, created_by: staff.discord_id, created_at: at, updated_by: staff.discord_id, updated_at: at };
         if (!row) state.meetings.push(saved);
         save();
         return ok(presentMeeting(saved));
+      });
+    },
+
+    async checkMeetingConflict(input = {}) {
+      return run('checkMeetingConflict', 'agenda.gerenciar', async () => {
+        const next = pickMeeting(input);
+        if (!next.starts_at || Number.isNaN(Date.parse(next.starts_at))) return ok(null);
+        const clash = findMeetingConflict({ id: input.id, starts_at: new Date(next.starts_at).toISOString(), participants: next.participants ?? [] }, state.meetings, state.staff);
+        return ok(clash ? clash.title : null);
       });
     },
 
