@@ -1307,8 +1307,19 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       const upserts = entries.filter(([, id]) => id).map(([role, discord_role_id]) => ({ role, discord_role_id }));
       const removes = entries.filter(([, id]) => !id).map(([role]) => role);
       if (upserts.length) {
-        const { error, status } = await sb.from('discord_role_ids').upsert(upserts, { onConflict: 'role' });
-        if (error) return failFrom(error, status);
+        // Sem upsert: o ON CONFLICT DO UPDATE tentaria gravar a coluna "role", que o banco não libera (só discord_role_id).
+        const existing = await sb.from('discord_role_ids').select('role');
+        if (existing.error) return failFrom(existing.error, existing.status);
+        const known = new Set(existing.data.map((r) => r.role));
+        const inserts = upserts.filter((u) => !known.has(u.role));
+        if (inserts.length) {
+          const { error, status } = await sb.from('discord_role_ids').insert(inserts);
+          if (error) return failFrom(error, status);
+        }
+        for (const { role, discord_role_id } of upserts.filter((u) => known.has(u.role))) {
+          const { error, status } = await sb.from('discord_role_ids').update({ discord_role_id }).eq('role', role);
+          if (error) return failFrom(error, status);
+        }
       }
       if (removes.length) {
         const { error, status } = await sb.from('discord_role_ids').delete().in('role', removes);
