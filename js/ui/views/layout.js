@@ -86,6 +86,12 @@ export function rulesLinks(app) {
   return [{ href: '#/regras', ico: 'book', label: 'Livro de Regras' }];
 }
 
+/** Agenda de Reuniões: seção "Agenda" do menu (só com o 17_agenda.sql no banco). */
+export function agendaLinks(app) {
+  if (!app.feature('agenda') || !(app.can('agenda.ler') || app.can('agenda.gerenciar'))) return [];
+  return [{ href: '#/agenda', ico: 'calendar-event', label: 'Agenda de Reuniões' }];
+}
+
 export function renderSidebar(app) {
   const { procedures, filters } = app.state;
   const visible = procedures.filter((p) => p.status !== 'arquivado');
@@ -107,6 +113,7 @@ export function renderSidebar(app) {
   const al = allowlistLinks(app);
   const lore = loreLinks(app);
   const rulesNav = rulesLinks(app);
+  const agendaNav = agendaLinks(app);
   const navLink = ({ href, ico, label, count }) =>
     h('a', { class: 'cat-item', href, 'data-nav': '', 'aria-current': String(app.router.route.hash === href) },
       h('span', { class: 'cat-label' }, icon(ico), ' ', label),
@@ -135,6 +142,9 @@ export function renderSidebar(app) {
     rulesNav.length > 0 && h('nav', { class: 'sidebar-tools', id: 'sidebar-rules', 'aria-labelledby': 'sidebar-rules-title' },
       h('h2', { class: 'sidebar-title', id: 'sidebar-rules-title' }, 'Regras'),
       rulesNav.map(navLink)),
+    agendaNav.length > 0 && h('nav', { class: 'sidebar-tools', id: 'sidebar-agenda', 'aria-labelledby': 'sidebar-agenda-title' },
+      h('h2', { class: 'sidebar-title', id: 'sidebar-agenda-title' }, 'Agenda'),
+      agendaNav.map(navLink)),
     links.length > 0 && h('nav', { class: 'sidebar-tools', 'aria-labelledby': 'sidebar-admin-title' },
       h('h2', { class: 'sidebar-title', id: 'sidebar-admin-title' }, 'Administração'),
       links.map(navLink)),

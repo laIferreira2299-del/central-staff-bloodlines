@@ -32,6 +32,8 @@ const ROUTES = [
   ['productivity', /^#\/controle$/],
   // Livro de Regras
   ['rules', /^#\/regras(?:\/([0-9a-f-]{36}))?$/],
+  // Agenda de Reuniões
+  ['agenda', /^#\/agenda$/],
 ];
 
 /** @returns {{ name: string, slug?: string, hash: string }} */

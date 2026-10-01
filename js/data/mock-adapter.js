@@ -18,6 +18,8 @@ import {
 } from '../core/lore.js';
 import { PRODUCTIVITY_ERRORS, aggregateProductivity } from '../core/productivity.js';
 import { RULE_ERRORS, pickRule, sortRules, validateRule } from '../core/rules.js';
+import { pickMeeting, sortMeetings, validateMeeting } from '../core/agenda.js';
+import { ROLE_LABELS } from '../core/permissions.js';
 import {
   PROPOSAL_ERRORS, contentChanged, proposalStatus, EVALUATION_ERRORS, evaluationChangeError, validateEvaluation,
   isPeriodOpen, validateAnnouncement, isAnnouncementFor, PROPOSAL_NOTE_MAX,
@@ -87,6 +89,7 @@ function allowlistState(seed, nowIso) {
     alEvaluations: [], alParticipants: [], alAnswers: [], alAttachments: [], webhooks: [],
     ...loreState(),
     ...rulesState(),
+    ...agendaState(),
   };
 }
 
@@ -95,6 +98,9 @@ const loreState = () => ({ characters: [], characterRevisions: [], characterNote
 
 /** Livro de Regras: vazio no começo (o conteúdo inicial vem do 16_regras_seed.sql no banco). */
 const rulesState = () => ({ rules: [] });
+
+/** Agenda de Reuniões: vazia no começo. Cada reunião guarda seus convocados em `participants`. */
+const agendaState = () => ({ meetings: [] });
 
 /**
  * @param {{
@@ -134,6 +140,7 @@ export function createMockAdapter({
       if (!parsed.questions) Object.assign(parsed, allowlistState(allowlistSeed, nowIso()));
       if (!parsed.characters) Object.assign(parsed, loreState());
       if (!parsed.rules) Object.assign(parsed, rulesState());
+      if (!parsed.meetings) Object.assign(parsed, agendaState());
       return parsed;
     } catch { return null; }
   }
@@ -285,6 +292,11 @@ export function createMockAdapter({
     return { ...clone(c), photo_url, created_by_name: nameOf(c.created_by), updated_by_name: nameOf(c.updated_by) };
   }
   const presentRule = (r) => ({ ...clone(r), created_by_name: nameOf(r.created_by), updated_by_name: nameOf(r.updated_by) });
+  const presentMeeting = (m) => ({
+    ...clone(m),
+    participants: m.participants.map((p) => ({ ...p, label: p.kind === 'role' ? ROLE_LABELS[p.value] ?? p.value : nameOf(p.value) ?? 'Membro removido' })),
+    created_by_name: nameOf(m.created_by), updated_by_name: nameOf(m.updated_by),
+  });
   const presentNote = (n) => ({ ...clone(n), created_by_name: nameOf(n.created_by) });
 
   /** Cria ou edita gabarito/checklist com autoria do "servidor". */
@@ -1286,6 +1298,41 @@ export function createMockAdapter({
         const row = state.rules.find((x) => x.id === id);
         if (!row) return fail('NOT_FOUND', 'Regra não encontrada.');
         state.rules = state.rules.filter((x) => x !== row);
+        save();
+        return ok(null);
+      });
+    },
+
+    /* ----- Agenda de Reuniões (agenda.ler / agenda.gerenciar) ----- */
+    async listMeetings() {
+      return run('listMeetings', 'staff', async ({ can }) => {
+        if (!can('agenda.ler') && !can('agenda.gerenciar')) return fail('FORBIDDEN');
+        return ok(sortMeetings(state.meetings).map(presentMeeting));
+      });
+    },
+
+    async saveMeeting(input = {}) {
+      return run('saveMeeting', 'agenda.gerenciar', async ({ staff }) => {
+        const row = input.id ? state.meetings.find((x) => x.id === input.id) : null;
+        if (input.id && !row) return fail('NOT_FOUND', 'Reunião não encontrada.');
+        const next = { participants: [], ...(row ? pickMeeting(row) : {}), ...pickMeeting(input) };
+        const { valid, errors } = validateMeeting(next);
+        if (!valid) return validationError(errors);
+        const fields = { ...next, starts_at: new Date(next.starts_at).toISOString() };
+        const at = nowIso();
+        if (row) Object.assign(row, fields, { updated_by: staff.discord_id, updated_at: at });
+        const saved = row ?? { id: uuid(), ...fields, created_by: staff.discord_id, created_at: at, updated_by: staff.discord_id, updated_at: at };
+        if (!row) state.meetings.push(saved);
+        save();
+        return ok(presentMeeting(saved));
+      });
+    },
+
+    async deleteMeeting(id) {
+      return run('deleteMeeting', 'agenda.gerenciar', async () => {
+        const row = state.meetings.find((x) => x.id === id);
+        if (!row) return fail('NOT_FOUND', 'Reunião não encontrada.');
+        state.meetings = state.meetings.filter((x) => x !== row);
         save();
         return ok(null);
       });

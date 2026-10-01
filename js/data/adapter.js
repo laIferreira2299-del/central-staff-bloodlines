@@ -289,6 +289,12 @@
  *           categoria = VALIDATION em errors.title (RULE_ERRORS.duplicate).
  * @property {(id: string) => Result<null>} deleteRule    regras.editar. NOT_FOUND se não existe.
  *
+ * Agenda de Reuniões (17_agenda.sql; regras em js/core/agenda.js)
+ * @property {() => Result<Meeting[]>} listMeetings    agenda.ler ou agenda.gerenciar. Ordem: horário (mais cedo primeiro).
+ * @property {(m: object) => Result<Meeting>} saveMeeting    agenda.gerenciar. Cria (sem id) ou edita; `participants`
+ *           ({ kind: 'role'|'member', value }) substitui a lista de convocados. Erros de campo = VALIDATION em details.errors.
+ * @property {(id: string) => Result<null>} deleteMeeting    agenda.gerenciar. NOT_FOUND se não existe.
+ *
  * Etapa 10 · produtividade (13_produtividade.sql; conta em js/core/productivity.js)
  * @property {(p: { from: string, to: string }) => Result<Productivity>} getProductivity   produtividade.ver. to exclusivo.
  * @property {() => Result<Array<{ discord_id: string, display_name: string }>>} listStaffNames   Staff: nomes de toda a equipe.
@@ -323,6 +329,7 @@ export const ADAPTER_METHODS = Object.freeze([
   'saveInterviewQuestion', 'saveChecklistItem', 'saveBlockedName',
   'listCharacters', 'getCharacter', 'saveCharacter', 'setCharacterPhoto', 'addCharacterNote', 'deleteCharacterNote',
   'listRules', 'saveRule', 'deleteRule',
+  'listMeetings', 'saveMeeting', 'deleteMeeting',
   'getProductivity', 'listStaffNames',
 ]);
 
@@ -388,7 +395,7 @@ export const WEBHOOK_COLUMNS = Object.freeze([
 ]);
 
 /** Módulos que o banco pode ter (Staff.features). */
-export const FEATURES = Object.freeze(['allowlist', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos', 'discord_cargos', 'lore', 'produtividade', 'regras']);
+export const FEATURES = Object.freeze(['agenda', 'allowlist', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos', 'discord_cargos', 'lore', 'produtividade', 'regras']);
 
 /** Campos que o cliente pode definir. Todo o resto é do servidor. */
 export const EDITABLE_FIELDS = Object.freeze([
