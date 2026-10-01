@@ -18,7 +18,7 @@ import {
 } from '../core/lore.js';
 import { PRODUCTIVITY_ERRORS } from '../core/productivity.js';
 import { RULE_ERRORS, pickRule, validateRule } from '../core/rules.js';
-import { CONFLICT_PREFIX, participantLabel, pickMeeting, validateMeeting } from '../core/agenda.js';
+import { CONFLICT_PREFIX, MEETING_STATUS_ERRORS, participantLabel, pickMeeting, validateMeeting } from '../core/agenda.js';
 import {
   PROPOSAL_ERRORS, PROPOSAL_NOTE_MAX, proposalStatus, validateAnnouncement, validateEvaluation,
 } from '../core/workflow.js';
@@ -34,7 +34,8 @@ const WEBHOOK_SELECT = WEBHOOK_COLUMNS.join(', ');
 const ATTACHMENT_COLUMNS = 'id, evaluation_id, storage_path, file_name, mime, size, position, created_at';
 const PRINTS_BUCKET = 'al-prints';
 const PHOTOS_BUCKET = 'character-photos';
-const MEETING_COLUMNS = 'id, title, description, starts_at, discord_link, created_by, created_at, updated_by, updated_at, meeting_participants (kind, value)';
+// '*' (e não a lista): o campo status só existe depois do SQL 18; o site funciona com o banco antigo e com o novo.
+const MEETING_COLUMNS = '*, meeting_participants (kind, value)';
 const RULE_COLUMNS = 'id, title, category, content, position, created_by, created_at, updated_by, updated_at';
 const CHARACTER_COLUMNS = 'id, character_name, discord_name, discord_id, city_id, photo_path, status, version, created_by, created_at, updated_by, updated_at';
 const FUNCTION_NAME = 'enviar-discord';
@@ -1220,6 +1221,35 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       return data?.length ? ok(null) : fail('NOT_FOUND', 'Reunião não encontrada.');
     },
 
+    /* ----- Botões da Agenda: status (18_agenda_status.sql) e avisos no Discord (Edge Function, ação 'reuniao') ----- */
+    async startMeeting(id) {
+      const { error: g } = await guard('agenda.gerenciar');
+      if (g) return g;
+      const moved = await moveMeeting(id, 'agendada', 'em_andamento', MEETING_STATUS_ERRORS.notStarted);
+      if (moved.error) return moved;
+      // O status já mudou: se o aviso no privado falhar, a reunião continua iniciada e a tela mostra o motivo.
+      const sent = await sendMeetingMessage(id, 'inicio');
+      return ok({ meeting: moved.data, dm: sent.error ? null : sent.data?.dm ?? null, dm_error: sent.error ? (sent.error.details?.errors?._ ?? sent.error.message) : null });
+    },
+
+    async endMeeting(id) {
+      const { error: g } = await guard('agenda.gerenciar');
+      if (g) return g;
+      return moveMeeting(id, 'em_andamento', 'concluida', MEETING_STATUS_ERRORS.notRunning);
+    },
+
+    async announceMeeting(id, { webhookId = null } = {}) {
+      const { error: g } = await guard('agenda.gerenciar');
+      if (g) return g;
+      return sendMeetingMessage(id, 'anuncio', webhookId);
+    },
+
+    async notifyMeeting(id) {
+      const { error: g } = await guard('agenda.gerenciar');
+      if (g) return g;
+      return sendMeetingMessage(id, 'convocacao');
+    },
+
     /* ----- Etapa 10: produtividade (13_produtividade.sql) ----- */
     async getProductivity({ from, to } = {}) {
       const { error: g } = await guard('produtividade.ver');
@@ -1308,6 +1338,30 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     if (payload?.error?.code) return fail(payload.error.code, payload.error.message, payload.error.details);
     if (response.status === 404) return fail('NETWORK', DISCORD_SEND_ERRORS.missingFunction);
     return failFrom({ message: payload?.message ?? error.message }, response.status);
+  }
+
+  /** Muda o status só se a reunião está no estado esperado (from); o banco também só deixa andar para a frente. */
+  async function moveMeeting(id, from, to, wrongState) {
+    const { data, error, status } = await sb.from('meetings').update({ status: to }).eq('id', id).eq('status', from).select(MEETING_COLUMNS);
+    if (error) {
+      if (error.code === '42703') return validation({ _: MEETING_STATUS_ERRORS.noStatus });
+      return error.code === 'KB422' ? validation({ _: error.message }) : failFrom(error, status);
+    }
+    if (!data?.length) {
+      const { data: row, error: e2, status: s2 } = await sb.from('meetings').select('id').eq('id', id).maybeSingle();
+      if (e2) return failFrom(e2, s2);
+      return row ? validation({ _: wrongState }) : fail('NOT_FOUND', 'Reunião não encontrada.');
+    }
+    await loadNames();
+    return ok(presentMeeting(data[0]));
+  }
+
+  /** Avisos da reunião pela Edge Function: kind 'anuncio' (canal), 'convocacao' ou 'inicio' (privado). */
+  async function sendMeetingMessage(id, kind, webhookId = null) {
+    const res = await invokeSend({ action: 'reuniao', meeting_id: id, kind, webhook_id: webhookId });
+    // A função antiga (antes dos botões da Agenda) não conhece a ação 'reuniao'.
+    if (res.error?.message === 'Ação desconhecida.') return fail('NETWORK', DISCORD_SEND_ERRORS.outdatedFunction);
+    return res;
   }
 
   /* ---------- Etapa 5: apoio da Allowlist ---------- */

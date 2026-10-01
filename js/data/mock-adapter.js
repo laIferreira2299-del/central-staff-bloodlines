@@ -8,7 +8,7 @@ import {
   AL_DEFAULTS, WEBHOOK_COLUMNS, pickAlAnswers, pickAlEvaluation, pickAlParticipants, pickWebhook,
 } from './adapter.js';
 import {
-  ALLOWLIST_ERRORS, DISCORD_SEND_ERRORS, MAX_PRINTS, announcementRecipients, validateDiscordRoleIds, normalizeName, printError, sentStatus, validateAlEvaluation,
+  ALLOWLIST_ERRORS, DISCORD_SEND_ERRORS, MAX_PRINTS, announcementRecipients, meetingList, meetingRecipients, validateDiscordRoleIds, normalizeName, printError, sentStatus, validateAlEvaluation,
   validateAlExtras, validateWebhook,
 } from '../core/allowlist.js';
 import { STATUSES, validateProcedure, validateStaffMember } from '../core/validate.js';
@@ -18,7 +18,7 @@ import {
 } from '../core/lore.js';
 import { PRODUCTIVITY_ERRORS, aggregateProductivity } from '../core/productivity.js';
 import { RULE_ERRORS, pickRule, sortRules, validateRule } from '../core/rules.js';
-import { findMeetingConflict, meetingConflictMessage, participantLabel, pickMeeting, sortMeetings, validateMeeting } from '../core/agenda.js';
+import { MEETING_STATUS_ERRORS, findMeetingConflict, meetingConflictMessage, participantLabel, pickMeeting, sortMeetings, validateMeeting } from '../core/agenda.js';
 import {
   PROPOSAL_ERRORS, contentChanged, proposalStatus, EVALUATION_ERRORS, evaluationChangeError, validateEvaluation,
   isPeriodOpen, validateAnnouncement, isAnnouncementFor, PROPOSAL_NOTE_MAX,
@@ -293,9 +293,19 @@ export function createMockAdapter({
   const presentRule = (r) => ({ ...clone(r), created_by_name: nameOf(r.created_by), updated_by_name: nameOf(r.updated_by) });
   const presentMeeting = (m) => ({
     ...clone(m),
+    status: m.status ?? 'agendada',
     participants: m.participants.map((p) => ({ ...p, label: participantLabel(p, nameOf) })),
     created_by_name: nameOf(m.created_by), updated_by_name: nameOf(m.updated_by),
   });
+  /** Muda o status da reunião só se estiver no estado esperado (mesma regra do banco: só anda para a frente). */
+  function moveMeeting(id, from, to, wrongState, staff) {
+    const row = state.meetings.find((x) => x.id === id);
+    if (!row) return fail('NOT_FOUND', 'Reunião não encontrada.');
+    if ((row.status ?? 'agendada') !== from) return validationError({ _: wrongState });
+    Object.assign(row, { status: to, updated_by: staff.discord_id, updated_at: nowIso() });
+    save();
+    return ok(row);
+  }
   const presentNote = (n) => ({ ...clone(n), created_by_name: nameOf(n.created_by) });
 
   /** Cria ou edita gabarito/checklist com autoria do "servidor". */
@@ -1322,7 +1332,7 @@ export function createMockAdapter({
         if (clash) return validationError({ starts_at: meetingConflictMessage(clash.title) });
         const at = nowIso();
         if (row) Object.assign(row, fields, { updated_by: staff.discord_id, updated_at: at });
-        const saved = row ?? { id: uuid(), ...fields, created_by: staff.discord_id, created_at: at, updated_by: staff.discord_id, updated_at: at };
+        const saved = row ?? { id: uuid(), ...fields, status: 'agendada', created_by: staff.discord_id, created_at: at, updated_by: staff.discord_id, updated_at: at };
         if (!row) state.meetings.push(saved);
         save();
         return ok(presentMeeting(saved));
@@ -1345,6 +1355,47 @@ export function createMockAdapter({
         state.meetings = state.meetings.filter((x) => x !== row);
         save();
         return ok(null);
+      });
+    },
+
+    /* ----- Botões da Agenda: status e avisos no Discord (simulados; o de verdade é a Edge Function) ----- */
+    async startMeeting(id) {
+      return run('startMeeting', 'agenda.gerenciar', async ({ staff }) => {
+        const moved = moveMeeting(id, 'agendada', 'em_andamento', MEETING_STATUS_ERRORS.notStarted, staff);
+        if (moved.error) return moved;
+        const recipients = meetingRecipients(meetingList(moved.data), state.staff);
+        return ok({ meeting: presentMeeting(moved.data), dm: { sent: recipients.length, failed: [] }, dm_error: null });
+      });
+    },
+
+    async endMeeting(id) {
+      return run('endMeeting', 'agenda.gerenciar', async ({ staff }) => {
+        const moved = moveMeeting(id, 'em_andamento', 'concluida', MEETING_STATUS_ERRORS.notRunning, staff);
+        return moved.error ? moved : ok(presentMeeting(moved.data));
+      });
+    },
+
+    async announceMeeting(id, { webhookId } = {}) {
+      return run('announceMeeting', 'agenda.gerenciar', async () => {
+        const m = state.meetings.find((x) => x.id === id);
+        if (!m) return fail('NOT_FOUND', DISCORD_SEND_ERRORS.meetingNotFound);
+        if (m.status === 'concluida') return validationError({ _: DISCORD_SEND_ERRORS.meetingClosed });
+        // Sem webhook escolhido: o primeiro ativo de Avisos (como a Edge Function).
+        const w = webhookId ? state.webhooks.find((x) => x.id === webhookId) : state.webhooks.find((x) => x.active && x.purpose === 'avisos');
+        if (!w) return validationError({ _: DISCORD_SEND_ERRORS.noWebhook });
+        if (!w.active || w.purpose !== 'avisos') return validationError({ _: DISCORD_SEND_ERRORS.webhook });
+        return ok({ sent_at: nowIso(), discord_status: sentStatus(w.name) });
+      });
+    },
+
+    async notifyMeeting(id) {
+      return run('notifyMeeting', 'agenda.gerenciar', async () => {
+        const m = state.meetings.find((x) => x.id === id);
+        if (!m) return fail('NOT_FOUND', DISCORD_SEND_ERRORS.meetingNotFound);
+        if (m.status === 'concluida') return validationError({ _: DISCORD_SEND_ERRORS.meetingClosed });
+        const recipients = meetingRecipients(meetingList(m), state.staff);
+        if (!recipients.length) return validationError({ _: DISCORD_SEND_ERRORS.noRecipients });
+        return ok({ sent_at: nowIso(), dm: { sent: recipients.length, failed: [] } });
       });
     },
 

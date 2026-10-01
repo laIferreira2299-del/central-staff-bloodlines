@@ -297,6 +297,14 @@
  * @property {(m: object) => Result<string|null>} checkMeetingConflict    agenda.gerenciar. Título da outra reunião no mesmo dia e minuto
  *           com convocados em comum (cargo, tag ou membro), ou null. `m`: { id?, starts_at, participants }. saveMeeting recusa
  *           o mesmo caso: VALIDATION em details.errors.starts_at (meetingConflictMessage).
+ * @property {(id: string) => Result<{ meeting: Meeting, dm: { sent: number, failed: string[] }|null, dm_error: string|null }>} startMeeting
+ *           agenda.gerenciar. Muda o status de 'agendada' para 'em_andamento' (outro estado = VALIDATION em errors._) e avisa no privado
+ *           todos os convocados (campo dm). Se o aviso falhar, a reunião continua iniciada e dm_error traz o motivo.
+ * @property {(id: string) => Result<Meeting>} endMeeting    agenda.gerenciar. 'em_andamento' → 'concluida' (outro estado = VALIDATION). Não avisa ninguém.
+ * @property {(id: string, o?: { webhookId?: string }) => Result<{ sent_at: string, discord_status: string }>} announceMeeting
+ *           agenda.gerenciar. Card no canal pelo webhook de Avisos (marca os cargos convocados).
+ * @property {(id: string) => Result<{ sent_at: string, dm: { sent: number, failed: string[] } }>} notifyMeeting
+ *           agenda.gerenciar. Privado (bot) de cada convocado: cargo e tag viram os membros ativos; DISCORD_SEND_ERRORS.noRecipients se ninguém.
  *
  * Etapa 10 · produtividade (13_produtividade.sql; conta em js/core/productivity.js)
  * @property {(p: { from: string, to: string }) => Result<Productivity>} getProductivity   produtividade.ver. to exclusivo.
@@ -332,7 +340,7 @@ export const ADAPTER_METHODS = Object.freeze([
   'saveInterviewQuestion', 'saveChecklistItem', 'saveBlockedName',
   'listCharacters', 'getCharacter', 'saveCharacter', 'setCharacterPhoto', 'addCharacterNote', 'deleteCharacterNote',
   'listRules', 'saveRule', 'deleteRule',
-  'listMeetings', 'saveMeeting', 'deleteMeeting', 'checkMeetingConflict',
+  'listMeetings', 'saveMeeting', 'deleteMeeting', 'checkMeetingConflict', 'startMeeting', 'endMeeting', 'announceMeeting', 'notifyMeeting',
   'getProductivity', 'listStaffNames',
 ]);
 

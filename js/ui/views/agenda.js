@@ -1,10 +1,12 @@
 // Agenda de Reuniões (plano 06): #/agenda. Ver: agenda.ler ou agenda.gerenciar (todos os cargos, por padrão).
 // Criar, editar e apagar: agenda.gerenciar (Head Staff e Direção, por padrão). Horário sempre de Brasília.
 import { h, icon, toast } from '../dom.js';
-import { confirmDialog } from '../modal.js';
+import { confirmDialog, openDialog } from '../modal.js';
 import {
-  DISCORD_LINK_PATTERN, MEETING_LIMITS, filterMeetings, formatMeetingDate, fromInputValue, isLive, meetingConflictMessage, toInputValue,
+  DISCORD_LINK_PATTERN, MEETING_LIMITS, MEETING_STATUS_LABELS, filterMeetings, formatMeetingDate, fromInputValue, isLive, meetingActions,
+  meetingConflictMessage, meetingStatus, toInputValue,
 } from '../../core/agenda.js';
+import { meetingDmSummary } from '../../core/allowlist.js';
 import { ROLE_LIST, TEAMS, TEAM_LABELS } from '../../core/permissions.js';
 import { formField, showFieldErrors } from './gabarito.js';
 import { renderMessage } from './message.js';
@@ -21,6 +23,7 @@ export function renderAgenda(app) {
   let alive = true;
   let meetings = [];
   let filter = 'proximas';
+  let hooks = []; // webhooks ativos de Avisos: só serve para escolher o canal quando há mais de um
   const slot = h('div', {});
   const list = h('div', { class: 'agenda-list', id: 'agenda-list' }, h('p', { class: 'panel-text' }, 'Carregando…'));
   const chips = h('div', { class: 'agenda-filters', id: 'agenda-filters', role: 'group', 'aria-label': 'Filtrar reuniões' });
@@ -33,6 +36,10 @@ export function renderAgenda(app) {
     if (res.error) { app.reportError(res.error, 'Não foi possível carregar a Agenda.'); return; }
     meetings = res.data;
     drawList();
+    if (canManage) {
+      const w = await app.adapter.listDiscordWebhooks({ purpose: 'avisos' });
+      if (alive && !w.error) hooks = (w.data ?? []).filter((x) => x.active && x.purpose === 'avisos');
+    }
   }
 
   /* ---------- lista ---------- */
@@ -67,17 +74,23 @@ export function renderAgenda(app) {
       return;
     }
     list.replaceChildren(...rows.map((m) => card(m, now)));
+    app.applyOnline();
   }
 
   function card(m, now) {
     const when = formatMeetingDate(m.starts_at);
-    const live = isLive(m.starts_at, now);
+    const status = meetingStatus(m);
+    const live = status !== 'concluida' && isLive(m.starts_at, now);
+    const acts = canManage ? meetingActions(m, now) : {};
+    const online = { 'data-requires-online': '' };
     const link = m.discord_link && DISCORD_LINK_PATTERN.test(m.discord_link) ? m.discord_link : null;
     return h('article', { class: `agenda-card${live ? ' agenda-card--live' : ''}`, dataset: { id: m.id } },
       h('div', { class: 'agenda-card-head' },
         h('div', { class: 'agenda-date', 'aria-hidden': 'true' }, h('span', { class: 'agenda-day' }, when.day), h('span', { class: 'agenda-month' }, when.month)),
         h('div', { class: 'agenda-info' },
-          live && h('span', { class: 'agenda-live' }, '● AO VIVO'),
+          live && status !== 'em_andamento' && h('span', { class: 'agenda-live' }, '● AO VIVO'),
+          status === 'em_andamento' && h('span', { class: 'agenda-live agenda-status', dataset: { status } }, `● ${MEETING_STATUS_LABELS[status].toUpperCase()}`),
+          status === 'concluida' && h('span', { class: 'badge badge--status agenda-status', dataset: { status } }, MEETING_STATUS_LABELS[status]),
           h('h2', { class: 'agenda-title' }, m.title),
           h('p', { class: 'agenda-when' }, icon('clock'), ` ${when.weekdayDate} às ${when.time}`),
           m.description && h('p', { class: 'agenda-desc' }, m.description),
@@ -86,8 +99,82 @@ export function renderAgenda(app) {
               h('span', { class: 'agenda-person-kind' }, p.kind === 'role' ? 'Cargo' : p.kind === 'team' ? 'Tag' : 'Membro'), ' ', p.label))))),
       (link || canManage) && h('div', { class: 'agenda-actions' },
         link && h('a', { class: 'btn btn--primary', href: link, target: '_blank', rel: 'noopener noreferrer' }, icon('brand-discord'), 'Entrar na call'),
+        acts.start && h('button', { type: 'button', class: 'btn btn--sm btn--primary', 'aria-label': `Iniciar ${m.title}`, ...online, dataset: { action: 'iniciar' }, onclick: () => start(m) }, icon('player-play'), 'Iniciar reunião'),
+        acts.end && h('button', { type: 'button', class: 'btn btn--sm btn--primary', 'aria-label': `Encerrar ${m.title}`, ...online, dataset: { action: 'encerrar' }, onclick: () => finish(m) }, icon('player-stop'), 'Encerrar reunião'),
+        acts.announce && h('button', { type: 'button', class: 'btn btn--sm', 'aria-label': `Anunciar ${m.title} no servidor`, ...online, dataset: { action: 'anunciar' }, onclick: () => announce(m) }, icon('speakerphone'), 'Anunciar no servidor'),
+        acts.notify && h('button', { type: 'button', class: 'btn btn--sm', 'aria-label': `Notificar convocados de ${m.title} por DM`, ...online, dataset: { action: 'notificar' }, onclick: () => notify(m) }, icon('bell'), 'Notificar por DM'),
         canManage && h('button', { type: 'button', class: 'btn btn--sm', 'aria-label': `Editar ${m.title}`, onclick: () => openForm(m) }, icon('pencil'), 'Editar'),
         canManage && h('button', { type: 'button', class: 'btn btn--sm btn--danger', 'aria-label': `Apagar ${m.title}`, onclick: () => remove(m) }, icon('trash'), 'Apagar')));
+  }
+
+  /* ---------- botões do card: Discord e status ---------- */
+  const hookName = (w) => (w.channel_name ? `${w.name} (${w.channel_name})` : w.name);
+  const okButton = (label) => [{ label, value: true, variant: 'primary', autofocus: true }];
+  const askAction = (title, body, confirmLabel) => openDialog({ title, body, actions: [
+    { label: 'Cancelar', value: false, variant: 'ghost' },
+    { label: confirmLabel, value: true, variant: 'primary', autofocus: true },
+  ] });
+
+  function showFailure(title, error) {
+    openDialog({ title: `✗ ${title}`, body: error.details?.errors?._ ?? error.message ?? 'Tente de novo.', actions: okButton('Entendi') });
+  }
+
+  /** Resultado do privado: aviso no canto se todos receberam; janela se alguém ficou de fora. */
+  function showDmResult(prefix, dm) {
+    const text = `${prefix} ${meetingDmSummary(dm)}`;
+    if (dm.failed.length) {
+      openDialog({ title: '⚠ Enviado, mas nem todos receberam no privado',
+        body: `${text} Quem não recebeu está com a DM fechada para o bot ou fora do servidor.`, actions: okButton('Entendi') });
+    } else toast(`✓ ${text}`, 5000);
+  }
+
+  function replaceMeeting(updated) {
+    meetings = meetings.map((x) => (x.id === updated.id ? updated : x));
+    drawCards();
+  }
+
+  async function announce(m) {
+    const sel = hooks.length > 1 ? h('select', { class: 'input input--sm', id: `agenda-hook-${m.id}`, 'aria-label': 'Enviar para qual canal?' },
+      hooks.map((w) => h('option', { value: w.id }, hookName(w)))) : null;
+    const body = h('div', {},
+      h('p', {}, `Enviar o card de "${m.title}" no canal${hooks.length === 1 ? ` ${hookName(hooks[0])}` : ' da staff'}, com título, data e horário, pauta e link da call.`),
+      sel,
+      h('p', { class: 'field-hint' }, 'Os cargos convocados são marcados no canal (se cadastrados em Configurações).'));
+    if (!(await askAction('Anunciar no servidor?', body, 'Anunciar'))) return;
+    const res = await app.adapter.announceMeeting(m.id, { webhookId: sel?.value || undefined });
+    if (res.error) { showFailure('Não foi anunciado no servidor', res.error); return; }
+    toast(`✓ Anunciado. Canal: ${res.data.discord_status.replace(/^enviado para /, '')}.`, 5000);
+  }
+
+  async function notify(m) {
+    const go = await askAction('Notificar por DM?',
+      `Enviar no privado de cada convocado o aviso da reunião "${m.title}", com data, horário e link. Cargos e tags valem para todos os membros ativos deles.`, 'Notificar');
+    if (!go) return;
+    const res = await app.adapter.notifyMeeting(m.id);
+    if (res.error) { showFailure('Os convocados não foram notificados', res.error); return; }
+    showDmResult('Enviado.', res.data.dm);
+  }
+
+  async function start(m) {
+    const go = await askAction('Iniciar a reunião agora?',
+      `"${m.title}" passa para Em andamento e todos os convocados recebem no privado o aviso de que ela começou, com o link da call.`, 'Iniciar');
+    if (!go) return;
+    const res = await app.adapter.startMeeting(m.id);
+    if (res.error) { showFailure('A reunião não foi iniciada', res.error); return; }
+    replaceMeeting(res.data.meeting);
+    if (res.data.dm_error) {
+      openDialog({ title: '⚠ Reunião iniciada, mas o aviso no privado não foi enviado', body: res.data.dm_error, actions: okButton('Entendi') });
+    } else if (res.data.dm) showDmResult('Reunião iniciada.', res.data.dm);
+    else toast('✓ Reunião iniciada.');
+  }
+
+  async function finish(m) {
+    const go = await confirmDialog({ title: 'Encerrar a reunião?', message: `"${m.title}" passa para Realizada. Ninguém é notificado.`, confirmLabel: 'Encerrar' });
+    if (!go) return;
+    const res = await app.adapter.endMeeting(m.id);
+    if (res.error) { showFailure('A reunião não foi encerrada', res.error); return; }
+    replaceMeeting(res.data);
+    toast('✓ Reunião encerrada.');
   }
 
   /* ---------- criar e editar ---------- */

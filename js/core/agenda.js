@@ -32,6 +32,7 @@ export const DISCORD_LINK_PATTERN = /^https:\/\/(discord\.gg\/|discord\.com\/(ch
 
 /** Minutos antes e depois do horário em que a reunião aparece como "ao vivo". */
 export const LIVE_WINDOW_MIN = 30;
+const BR_ZONE = 'America/Sao_Paulo';
 
 const clean = (v) => String(v ?? '').trim();
 const DISCORD_ID = /^[0-9]{17,20}$/;
@@ -127,14 +128,56 @@ export function isLive(startsAt, now = new Date()) {
 /** Ainda não acabou: começa daqui para a frente ou está ao vivo. */
 export const isUpcoming = (startsAt, now = new Date()) => new Date(startsAt).getTime() >= new Date(now).getTime() - LIVE_WINDOW_MIN * 60000;
 
+/* ---------- status (18_agenda_status.sql) ---------- */
+export const MEETING_STATUSES = Object.freeze(['agendada', 'em_andamento', 'concluida']);
+export const MEETING_STATUS_LABELS = Object.freeze({ agendada: 'Agendada', em_andamento: 'Em andamento', concluida: 'Realizada' });
+
+/** Mensagens das travas. `transition` é IGUAL à de supabase/18_agenda_status.sql (tests/db/banco.test.mjs confere). */
+export const MEETING_STATUS_ERRORS = Object.freeze({
+  transition: 'Status inválido: a reunião só vai de agendada para em andamento e de em andamento para concluída.',
+  notStarted: 'Esta reunião não está agendada: ela já foi iniciada ou encerrada.',
+  notRunning: 'Esta reunião não está em andamento.',
+  noStatus: 'O banco ainda não tem o status das reuniões (falta rodar o SQL 18). Avise a administração.',
+});
+
+/** Banco antigo (sem o 18) não manda o campo: a reunião vale como agendada e os botões de status ficam escondidos. */
+export const hasMeetingStatus = (m) => MEETING_STATUSES.includes(m?.status);
+export const meetingStatus = (m) => (hasMeetingStatus(m) ? m.status : 'agendada');
+
+/** Só avança: agendada → em andamento → concluída. */
+export const canMoveMeetingStatus = (from, to) => (from === 'agendada' && to === 'em_andamento') || (from === 'em_andamento' && to === 'concluida');
+
+/** Dia no calendário de Brasília ("2026-10-05"), para comparar "é hoje ou depois". */
+const dayKey = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: BR_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(date));
+
+/**
+ * Quais botões do card aparecem (só para quem gerencia a Agenda):
+ *   announce e notify: reunião agendada que ainda não passou;
+ *   start: agendada, hoje ou nos próximos dias (precisa do status no banco);
+ *   end: em andamento (precisa do status no banco).
+ */
+export function meetingActions(m, now = new Date()) {
+  const status = meetingStatus(m);
+  const open = status === 'agendada';
+  return {
+    announce: open && isUpcoming(m.starts_at, now),
+    notify: open && isUpcoming(m.starts_at, now),
+    start: hasMeetingStatus(m) && open && dayKey(m.starts_at) >= dayKey(now),
+    end: hasMeetingStatus(m) && status === 'em_andamento',
+  };
+}
+
 /** Ordem da lista: por horário (mais cedo primeiro, desempate pelo título). */
 export const sortMeetings = (list) => [...list].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at) || a.title.localeCompare(b.title, 'pt-BR'));
+
+/** Reunião em andamento continua em "Próximas" mesmo depois da hora marcada, até ser encerrada. */
+const isOpen = (m, now) => isUpcoming(m.starts_at, now) || m.status === 'em_andamento';
 
 /** Filtro 'proximas' (mais cedo primeiro), 'passadas' (mais recente primeiro) ou 'todas' (mais recente primeiro). */
 export function filterMeetings(list, filter = 'proximas', now = new Date()) {
   const sorted = sortMeetings(list);
-  if (filter === 'proximas') return sorted.filter((m) => isUpcoming(m.starts_at, now));
-  if (filter === 'passadas') return sorted.filter((m) => !isUpcoming(m.starts_at, now)).reverse();
+  if (filter === 'proximas') return sorted.filter((m) => isOpen(m, now));
+  if (filter === 'passadas') return sorted.filter((m) => !isOpen(m, now)).reverse();
   return sorted.reverse();
 }
 

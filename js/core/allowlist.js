@@ -572,7 +572,12 @@ export const DISCORD_SEND_ERRORS = Object.freeze({
   announcementNotFound: 'Aviso não encontrado.',
   noBot: 'O bot do Discord ainda não foi configurado no Supabase (segredo DISCORD_BOT_TOKEN). Avise a administração.',
   nothingToSend: 'Escolha enviar no canal, no privado ou nos dois.',
-  outdatedFunction: 'A função enviar-discord instalada no Supabase é de uma versão antiga e ainda não envia avisos. Avise a administração para colar o arquivo novo (supabase/functions/enviar-discord/index.ts) e clicar Deploy.',
+  outdatedFunction: 'A função enviar-discord instalada no Supabase é de uma versão antiga e ainda não envia avisos nem reuniões. Avise a administração para colar o arquivo novo (supabase/functions/enviar-discord/index.ts) e clicar Deploy.',
+  meetingForbidden: 'Seu cargo não permite avisar sobre reuniões.',
+  meetingNotFound: 'Reunião não encontrada.',
+  meetingClosed: 'Esta reunião já foi encerrada.',
+  meetingKind: 'Tipo de mensagem da reunião desconhecido.',
+  noRecipients: 'Nenhum convocado ativo para avisar. Confira os convocados da reunião.',
 });
 export const TEST_MESSAGE = '✓ Teste de conexão — Bloodlines RP · Central da Staff';
 
@@ -679,6 +684,98 @@ export const buildAnnouncementDm = (a, opts = {}) => ({
 export function dmSummary({ sent = 0, failed = [] } = {}) {
   const total = sent + failed.length;
   if (!total) return 'Ninguém da staff tem esse cargo: nada foi enviado no privado.';
+  return `Privado: ${sent} de ${total} receberam.${failed.length ? ` Não receberam: ${failed.join(', ')}.` : ''}`;
+}
+
+/* ======================= Reuniões no Discord (botões da Agenda, plano 06) ======================= */
+/** Tipos de mensagem: anuncio (canal, pelo webhook de Avisos), convocacao (privado) e inicio (privado, "começou agora"). */
+export const MEETING_MESSAGE_KINDS = Object.freeze(['anuncio', 'convocacao', 'inicio']);
+/** Mesma expressão de DISCORD_LINK_PATTERN (js/core/agenda.js); tests/unit/agenda.test.mjs confere. */
+export const MEETING_LINK = /^https:\/\/(discord\.gg\/|discord\.com\/(channels|invite)\/)[^\s]+$/;
+/** Iguais a TEAM_LABELS (permissions.js); o teste confere. */
+export const MEETING_TEAM_LABELS = Object.freeze({ allowlist: 'Equipe de Allowlist', lore: 'Equipe de Lore' });
+export const MEETING_DISCORD = Object.freeze({
+  titles: Object.freeze({ anuncio: 'Reunião', convocacao: 'Convocação', inicio: 'Reunião começou agora' }),
+  colors: Object.freeze({ anuncio: 0x5B8DEF, convocacao: 0xE0A43A, inicio: 0x3DAA6A }),
+  intros: Object.freeze({
+    convocacao: 'Você foi convocado(a) para uma reunião da staff:',
+    inicio: 'A reunião começou agora. Entre na call:',
+  }),
+});
+
+export const meetingList = (m) => m.participants ?? m.meeting_participants ?? [];
+const meetingLink = (m) => (MEETING_LINK.test(clean(m.discord_link)) ? clean(m.discord_link) : '');
+
+/** Convocados em texto: cargo, equipe ou nome do membro. @param {Array<{ kind: string, value: string }>} participants */
+export function meetingAudienceText(participants = [], staff = []) {
+  const names = new Map(staff.map((s) => [s.discord_id, s.display_name]));
+  const labels = participants.map((p) => (p.kind === 'role' ? ANNOUNCEMENT_DISCORD.roles[p.value] ?? p.value
+    : p.kind === 'team' ? MEETING_TEAM_LABELS[p.value] ?? p.value : names.get(p.value) ?? 'Membro removido'));
+  return labels.length ? labels.join(', ').slice(0, 1000) : 'A definir';
+}
+
+/**
+ * Quem recebe no privado: membros ativos alcançados pelos convocados (cargo inteiro, tag de equipe ou o próprio membro).
+ * Mesma conta de audienceOf (js/core/agenda.js).
+ * @param {Array<{ kind: string, value: string }>} participants
+ * @param {Array<{ discord_id: string, display_name?: string, role: string, teams?: string[], active?: boolean }>} staff
+ */
+export const meetingRecipients = (participants = [], staff = []) => staff.filter((s) => s.active !== false && DISCORD_ID.test(s.discord_id ?? '')
+  && participants.some((p) => (p.kind === 'role' && p.value === s.role) || (p.kind === 'team' && (s.teams ?? []).includes(p.value))
+    || (p.kind === 'member' && p.value === s.discord_id)));
+
+/** Cargos do Discord a marcar no canal: só os dos cargos convocados (tag e membro não marcam ninguém). */
+export const meetingMentions = (participants = [], roleIds = []) => {
+  const roles = new Set(participants.filter((p) => p.kind === 'role').map((p) => p.value));
+  return [...new Set(roleIds.filter((r) => roles.has(r.role)).map((r) => clean(r.discord_role_id)).filter((id) => DISCORD_ID.test(id)))];
+};
+
+/** Card da reunião (canal e privado usam o mesmo desenho). */
+export function meetingEmbed(m, { kind = 'anuncio', senderName = '', staff = [], now = new Date() } = {}) {
+  const ts = Math.floor(new Date(m.starts_at).getTime() / 1000);
+  const link = meetingLink(m);
+  const pauta = clean(m.description);
+  const fields = [
+    { name: '◷ Quando', value: `${formatAnalyzedAt(m.starts_at)} (Brasília) · <t:${ts}:R>`, inline: false },
+    { name: '⏣ Convocados', value: meetingAudienceText(meetingList(m), staff), inline: false },
+  ];
+  if (link) fields.push({ name: '✆ Call no Discord', value: link, inline: false });
+  if (kind === 'anuncio' && clean(senderName)) fields.push({ name: '✎ Marcado por', value: clean(senderName), inline: true });
+  return {
+    title: `${MEETING_DISCORD.titles[kind] ?? MEETING_DISCORD.titles.anuncio}: ${clean(m.title)}`.slice(0, 256),
+    ...(pauta ? { description: `**Pauta**\n${pauta}`.slice(0, 4096) } : {}),
+    ...(link ? { url: link } : {}),
+    color: MEETING_DISCORD.colors[kind] ?? MEETING_DISCORD.colors.anuncio,
+    fields,
+    timestamp: new Date(now).toISOString(),
+    footer: { text: 'Bloodlines RP · Agenda de Reuniões' },
+  };
+}
+
+/** Mensagem do webhook (canal geral da staff). Marca só os cargos de mentionRoleIds. */
+export function buildMeetingAnnouncement(m, { sender = {}, mentionRoleIds = [], ...opts } = {}) {
+  const ids = mentionRoleIds.filter((id) => DISCORD_ID.test(id));
+  return {
+    username: clean(sender.name) || 'Bloodlines RP · Agenda',
+    ...(clean(sender.avatarUrl) ? { avatar_url: clean(sender.avatarUrl) } : {}),
+    ...(ids.length ? { content: ids.map((id) => `<@&${id}>`).join(' ') } : {}),
+    allowed_mentions: ids.length ? { parse: [], roles: ids } : { parse: [] },
+    embeds: [meetingEmbed(m, { ...opts, kind: 'anuncio' })],
+    files: [],
+  };
+}
+
+/** Mensagem do bot no privado: convocação ("convocacao") ou "começou agora" ("inicio"). Não marca ninguém. */
+export const buildMeetingDm = (m, { kind = 'convocacao', ...opts } = {}) => ({
+  content: MEETING_DISCORD.intros[kind] ?? MEETING_DISCORD.intros.convocacao,
+  allowed_mentions: { parse: [] },
+  embeds: [meetingEmbed(m, { ...opts, kind })],
+});
+
+/** Resumo do privado das reuniões para a tela. */
+export function meetingDmSummary({ sent = 0, failed = [] } = {}) {
+  const total = sent + failed.length;
+  if (!total) return 'Nenhum convocado ativo para avisar: nada foi enviado no privado.';
   return `Privado: ${sent} de ${total} receberam.${failed.length ? ` Não receberam: ${failed.join(', ')}.` : ''}`;
 }
 
