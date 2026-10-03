@@ -1,6 +1,7 @@
 // Controlador da interface: sessão, dados, estado, roteamento e ações comuns.
 // Toda leitura/escrita passa pelo adapter (nunca direto no Supabase).
 import { buildIndex, search } from '../core/search.js';
+import { filterRules } from '../core/rules.js';
 import { debounce, h, icon, toast } from './dom.js';
 import { createRouter } from './router.js';
 import { renderSidebar, renderUser } from './views/layout.js';
@@ -49,6 +50,7 @@ export function createApp(adapter, { isMock = false } = {}) {
     staff: null,
     procedures: [],
     index: [],
+    rules: [],
     favorites: new Set(),
     online: navigator.onLine,
     query: '',
@@ -143,14 +145,28 @@ export function createApp(adapter, { isMock = false } = {}) {
       }).map((r) => r.proc);
     },
 
+    /** Quem pode abrir o Livro de Regras (mesma regra da tela #/regras). */
+    canReadRules() {
+      return app.feature('regras') && (app.can('regras.ler') || app.can('regras.editar'));
+    },
+
+    /** Regras que combinam com o termo da busca do topo (só quando há termo). */
+    ruleResults() {
+      if (!state.query.trim() || !app.canReadRules()) return [];
+      return filterRules(state.rules, { query: state.query });
+    },
+
     /** Recarrega procedimentos e favoritos do adapter. */
     async reload() {
       const token = authToken;
-      const [procs, favs, staffChanged] = await Promise.all([
+      const [procs, favs, staffChanged, rulesRes] = await Promise.all([
         adapter.listProcedures({ includeArchived: true }),
         adapter.listFavorites(),
         app.refreshStaff(),
+        app.canReadRules() ? adapter.listRules() : null,
       ]);
+      // A busca do topo também procura no Livro de Regras; se falhar, só some a seção de regras.
+      state.rules = rulesRes && !rulesRes.error ? rulesRes.data : [];
       app.refreshCounts();
       if (token !== authToken) return false;
       if (procs.error) { reportError(procs.error, 'Não foi possível carregar os procedimentos.'); return false; }

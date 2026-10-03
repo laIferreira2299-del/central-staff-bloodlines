@@ -56,7 +56,16 @@ export function renderHome(app) {
   let body;
   if (filtering) {
     const results = app.results();
-    body = h('section', { class: 'home-section', 'aria-labelledby': 'results-title' },
+    const ruleRows = app.ruleResults();
+    const rulesSection = ruleRows.length > 0 && h('section', { class: 'home-section', id: 'rules-results', 'aria-labelledby': 'rules-results-title' },
+      h('div', { class: 'section-head' },
+        h('h2', { class: 'section-title', id: 'rules-results-title' }, 'Livro de Regras'),
+        h('span', { class: 'section-count', role: 'status' }, `${ruleRows.length} ${ruleRows.length === 1 ? 'regra' : 'regras'}`)),
+      h('div', { class: 'card-grid' }, ruleRows.map((r) => h('article', { class: 'rule-card', dataset: { id: r.id } },
+        h('a', { class: 'rule-card-link', href: `#/regras/${r.id}` },
+          h('p', { class: 'rule-cat-tag' }, r.category),
+          h('h3', { class: 'rule-card-title' }, r.title))))));
+    body = [rulesSection, h('section', { class: 'home-section', 'aria-labelledby': 'results-title' },
       h('div', { class: 'section-head' },
         h('h2', { class: 'section-title', id: 'results-title' }, 'Resultados'),
         h('span', { class: 'section-count', role: 'status', id: 'results-count' },
@@ -74,7 +83,7 @@ export function renderHome(app) {
               class: 'btn btn--primary', href: '#/novo',
               onclick: () => { state.prefillTitle = query; },
             }, icon('plus'), 'Cadastrar este procedimento')
-            : app.hasFilters() && h('button', { type: 'button', class: 'btn', onclick: () => app.clearFilters() }, icon('filter-off'), 'Limpar filtros')));
+            : app.hasFilters() && h('button', { type: 'button', class: 'btn', onclick: () => app.clearFilters() }, icon('filter-off'), 'Limpar filtros')))];
   } else {
     const favorites = visible.filter((p) => app.isFav(p)).sort(byTitle);
     const review = visible.filter((p) => needsReview(p)).sort(byTitle);
