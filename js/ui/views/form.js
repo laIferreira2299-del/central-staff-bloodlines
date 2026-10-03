@@ -419,6 +419,11 @@ export function renderForm(app, { slug } = {}) {
     lastStored = json;
   }
   const timer = setInterval(storeDraft, DRAFT_INTERVAL_MS);
+  // Minimizar, trocar de aba ou fechar a página: grava na hora o que ainda não tinha sido guardado.
+  const flushDraft = () => storeDraft();
+  const flushIfHidden = () => { if (document.visibilityState === 'hidden') storeDraft(); };
+  document.addEventListener('visibilitychange', flushIfHidden);
+  window.addEventListener('pagehide', flushDraft);
 
   const stored = storage.get(draftKey);
   if (stored?.draft && JSON.stringify(stored.draft) !== JSON.stringify(initial)) {
@@ -454,7 +459,7 @@ export function renderForm(app, { slug } = {}) {
       message: 'As alterações que você fez neste formulário não foram salvas.',
       confirmLabel: 'Descartar', cancelLabel: 'Continuar editando', danger: true,
     });
-    if (discard) storage.remove(draftKey);
+    if (discard) { storage.remove(draftKey); dirty = false; }
     return discard;
   });
 
@@ -475,7 +480,10 @@ export function renderForm(app, { slug } = {}) {
   mount();
 
   return () => {
+    storeDraft();
     clearInterval(timer);
+    document.removeEventListener('visibilitychange', flushIfHidden);
+    window.removeEventListener('pagehide', flushDraft);
     clearTimeout(previewTimer);
     app.router.clearGuard();
   };

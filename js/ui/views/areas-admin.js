@@ -9,6 +9,7 @@ import {
 } from '../../core/areas.js';
 import { AREA_DISCORD_ERRORS, AREA_MESSAGE_MAX, areaSendSummary, validateAreaMessage } from '../../core/allowlist.js';
 import { ROLE_LABELS, ROLE_LIST } from '../../core/permissions.js';
+import { createDraft, attachFormDraft } from '../draft.js';
 import { formField, showFieldErrors } from './gabarito.js';
 import { colored, errorText, safeColor, safeIcon, unavailable } from './areas.js';
 
@@ -37,6 +38,7 @@ export function renderAreasAdmin(app) {
     hist: { areaId: '', actorId: '', acao: '', from: '', to: '', page: 0 },
     msg: { view: 'enviar', tipo: 'canal', picked: new Set(), canal: null, texto: '', cargo: false, call: '', result: null, sentArea: '', page: 0 },
   };
+  let draft = null; // rascunho automático do formulário aberto na aba
   const panel = h('div', { class: 'areas-panel', id: 'aa-panel' });
   const tabs = h('div', { class: 'areas-tabs', role: 'tablist', 'aria-label': 'Seções da gestão' });
   app.els.main.replaceChildren(h('div', { class: 'main-inner areas-page' },
@@ -81,6 +83,8 @@ export function renderAreasAdmin(app) {
 
   function drawPanel() {
     drawToken += 1;
+    draft?.stop();
+    draft = null;
     ({ areas: drawAreas, membros: drawMembers, tags: drawTags, comunicacao: drawCommunication, historico: drawHistory })[ctx.tab]();
   }
 
@@ -195,7 +199,7 @@ export function renderAreasAdmin(app) {
       h('h2', { class: 'areas-editor-title' }, editing ? `Editar ${a.nome}` : 'Nova área'),
       Object.values(fields).map((f) => f.el), general,
       h('div', { class: 'areas-editor-actions' },
-        h('button', { type: 'button', class: 'btn btn--ghost', id: 'aa-cancel', onclick: () => { ctx.editingArea = null; drawPanel(); } }, 'Cancelar'), save));
+        h('button', { type: 'button', class: 'btn btn--ghost', id: 'aa-cancel', onclick: () => { draft?.clear(); ctx.editingArea = null; drawPanel(); } }, 'Cancelar'), save));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       save.disabled = true;
@@ -207,11 +211,13 @@ export function renderAreasAdmin(app) {
       save.disabled = false;
       if (!alive) return;
       if (res.error) { showFieldErrors(fields, general, res.error); return; }
+      draft?.clear();
       ctx.editingArea = null;
       toast(editing ? 'Área salva.' : 'Área criada.');
       if (await reloadAreas()) drawPanel();
     });
     panel.replaceChildren(form);
+    draft = attachFormDraft(app, `area:${a.id ?? 'nova'}`, form, { bannerId: 'aa-draft-banner' });
     fields.nome.input.focus();
   }
 
@@ -315,7 +321,7 @@ export function renderAreasAdmin(app) {
       h('h2', { class: 'areas-editor-title' }, t.id ? `Editar tag ${t.nome}` : 'Nova tag'),
       Object.values(fields).map((f) => f.el), general,
       h('div', { class: 'areas-editor-actions' },
-        t.id && h('button', { type: 'button', class: 'btn btn--ghost', id: 'aa-t-cancel', onclick: () => { ctx.editingTag = null; drawPanel(); } }, 'Cancelar'),
+        t.id && h('button', { type: 'button', class: 'btn btn--ghost', id: 'aa-t-cancel', onclick: () => { draft?.clear(); ctx.editingTag = null; drawPanel(); } }, 'Cancelar'),
         h('button', { type: 'submit', class: 'btn btn--primary', id: 'aa-t-save' }, 'Salvar tag')));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -324,6 +330,7 @@ export function renderAreasAdmin(app) {
       });
       if (!alive) return;
       if (saved.error) { showFieldErrors(fields, general, saved.error); return; }
+      draft?.clear();
       ctx.editingTag = null;
       toast(t.id ? 'Tag salva.' : 'Tag criada.');
       drawPanel();
@@ -345,6 +352,7 @@ export function renderAreasAdmin(app) {
     panel.replaceChildren(
       areaPicker(() => { ctx.editingTag = null; drawPanel(); }), form,
       res.data.length ? h('ul', { class: 'areas-team', id: 'aa-tags' }, res.data.map(row)) : h('p', { class: 'panel-text areas-empty' }, 'Esta área ainda não tem tags.'));
+    draft = attachFormDraft(app, `area-tag:${area.id}:${t.id ?? 'nova'}`, form, { bannerId: 'aa-t-draft-banner' });
     if (t.id) fields.nome.input.focus();
   }
 
@@ -414,6 +422,17 @@ export function renderAreasAdmin(app) {
       mencionar_cargo: usesChannel && m.cargo && Boolean(area.discord_role_id),
       link_call: m.tipo === 'alinhamento' ? m.call.trim() : '',
     });
+    // Rascunho da mensagem: o que será enviado (texto, tipo, canal, marcações), sem o resultado do último envio.
+    const EMPTY_MESSAGE = { tipo: 'canal', texto: '', canal: null, cargo: false, call: '', picked: [] };
+    draft = createDraft(app, `area-msg:${area.id}`, {
+      read: () => ({ tipo: m.tipo, texto: m.texto, canal: m.canal, cargo: m.cargo, call: m.call, picked: [...m.picked] }),
+      initial: EMPTY_MESSAGE, hasContent: (v) => Boolean(v.texto?.trim()),
+    });
+    const draftBanner = draft.banner((v) => {
+      Object.assign(m, { tipo: v.tipo, texto: v.texto, canal: v.canal, cargo: v.cargo, call: v.call, result: null });
+      m.picked = new Set(v.picked);
+      drawPanel();
+    }, { id: 'aa-m-draft-banner' });
     const peopleNames = (ids) => ids.map((id) => team.data.find((p) => p.discord_id === id)?.display_name ?? id);
 
     async function submit(e) {
@@ -451,6 +470,7 @@ export function renderAreasAdmin(app) {
       m.texto = '';
       m.result = res.data;
       m.picked.clear();
+      draft?.clear();
       toast(areaSendSummary(res.data), 3500);
       drawPanel();
     }
@@ -463,6 +483,7 @@ export function renderAreasAdmin(app) {
     panel.replaceChildren(...[
       views,
       areaPicker(() => { clear(); drawPanel(); }),
+      draftBanner,
       archived && h('p', { class: 'panel-text areas-readonly', id: 'aa-m-note' }, 'Esta área está arquivada: reative para enviar mensagens.'),
       result,
       h('form', { class: 'areas-editor', id: 'aa-compose', novalidate: true, onsubmit: submit },
@@ -537,5 +558,5 @@ export function renderAreasAdmin(app) {
   }
 
   load();
-  return () => { alive = false; };
+  return () => { alive = false; draft?.stop(); };
 }

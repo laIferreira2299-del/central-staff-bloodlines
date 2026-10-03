@@ -14,6 +14,7 @@ import {
   formatAnalyzedAt, formatSubmittedAt, isMinor, nextStatus, parseAge, playerMessage, printError, toggleFlag,
 } from '../../core/allowlist.js';
 import { renderMessage } from './message.js';
+import { createDraft } from '../draft.js';
 
 const FLAG_TONE = { ev1: 'ok', ev2: 'ok', ev3: 'bad', ev4: 'bad', ev5: 'warn' };
 const FLAG_MARK = { ev1: 'ꪜ', ev2: 'ꪜ', ev3: '✘', ev4: '✘', ev5: '⚠' };
@@ -187,11 +188,15 @@ function participantsPanel(staff, list, myId, onChange) {
     err, ul);
 }
 
+/** Campos de texto da análise que entram no rascunho (o resto é lista, marcação ou arquivo). */
+const DRAFT_TEXT = ['al_id', 'author_handle', 'player_discord_id', 'player_age', 'character_name', 'submitted_at_text', 'reason', 'notes'];
+
 export function renderAlForm(app, kind, id = null) {
   if (alDenied(app)) return null;
   let alive = true;
   let dirty = false;
   let cleanupBuild = () => {};
+  let draft = null; // rascunho automático (a análise/entrevista aberta)
   const body = h('div', {}, h('p', { class: 'panel-text' }, 'Carregando…'));
   app.els.main.replaceChildren(h('div', { class: `main-inner al-page al-page--${kind}` },
     h('a', { class: 'back', href: '#/avaliacoes' }, icon('arrow-left'), 'Histórico de allowlist e entrevistas'),
@@ -224,7 +229,7 @@ export function renderAlForm(app, kind, id = null) {
     build(ev, config, (ev?.attachments ?? []).map((a) => ({ ...a, url: urlOf.get(a.id) ?? '' })).filter((a) => a.url));
   }
 
-  function build(ev, config, attachments) {
+  function build(ev, config, attachments, restored = null) {
     cleanupBuild();
     dirty = false;
     const me = app.state.staff;
@@ -237,6 +242,16 @@ export function renderAlForm(app, kind, id = null) {
       participants: (ev?.participants ?? []).filter((p) => p.role !== 'responsavel').map((p) => ({ discord_id: p.discord_id, role: p.role })),
       answers: new Map((ev?.answers ?? []).filter((a) => a.question_id).map((a) => [a.question_id, { note: a.note, send: a.send_to_discord }])),
     };
+    if (restored) {
+      // Rascunho recuperado: volta o que estava escrito (os prints são arquivos e não ficam no rascunho).
+      for (const k of DRAFT_TEXT) if (typeof restored[k] === 'string') st[k] = restored[k];
+      st.eval_flags = [...(restored.eval_flags ?? [])];
+      st.status = restored.status ?? null;
+      st.checked = new Set(restored.checked ?? []);
+      st.participants = (restored.participants ?? []).map((p) => ({ ...p }));
+      st.answers = new Map((restored.answers ?? []).map(([k, v]) => [k, { ...v }]));
+      dirty = true;
+    }
     const touch = () => { dirty = true; };
     const age = () => parseAge(st.player_age);
     const errs = {};
@@ -512,6 +527,7 @@ export function renderAlForm(app, kind, id = null) {
       }
       prints.saved(uploaded);
       dirty = false;
+      draft?.clear();
       if (!quiet) toast('Análise salva no histórico.');
       return st.id;
     }
@@ -524,6 +540,7 @@ export function renderAlForm(app, kind, id = null) {
     const newBtn = kind === 'entrevista' && h('button', { type: 'button', class: 'btn btn--ghost', id: 'al-new', onclick: async () => {
       if (dirty && !await confirmDialog({ title: 'Começar uma nova entrevista?', message: 'O que não foi salvo nesta entrevista será perdido.', confirmLabel: 'Nova entrevista', danger: true })) return;
       dirty = false;
+      draft?.clear();
       if (id) { app.router.clearGuard(); app.router.go(BASE[kind]); return; }
       build(null, config, []);
       app.els.main.querySelector('#al-author_handle')?.focus();
@@ -573,11 +590,26 @@ export function renderAlForm(app, kind, id = null) {
     }
     update('init');
     app.applyOnline();
+    const readDraft = () => ({
+      ...Object.fromEntries(DRAFT_TEXT.map((k) => [k, st[k]])),
+      eval_flags: [...st.eval_flags], status: st.status, checked: [...st.checked].sort(),
+      participants: st.participants.map((p) => ({ ...p })), answers: [...st.answers].map(([k, v]) => [k, { ...v }]),
+    });
+    draft = createDraft(app, `${kind}:${id ?? 'novo'}`, {
+      read: readDraft,
+      hasContent: (v) => DRAFT_TEXT.some((k) => String(v[k] ?? '').trim()) || Boolean(v.status) || v.eval_flags.length > 0
+        || v.checked.length > 0 || v.participants.length > 0 || v.answers.some(([, a]) => a.note.trim() || a.send),
+    });
+    const draftBanner = draft.banner((v) => {
+      build(ev, config, attachments, v);
+      toast('Os prints anexados não ficam no rascunho: anexe de novo, se precisar.', 4500);
+    }, { id: 'al-draft-banner' });
+    if (draftBanner) body.prepend(draftBanner);
     app.router.setGuard(async () => {
       if (!dirty) return true;
       return confirmDialog({ title: 'Sair sem salvar?', message: 'A análise ainda não foi salva no histórico.', confirmLabel: 'Sair sem salvar', cancelLabel: 'Continuar', danger: true });
     });
-    cleanupBuild = () => { document.removeEventListener('paste', onPaste); prints.dispose(); };
+    cleanupBuild = () => { draft?.stop(); document.removeEventListener('paste', onPaste); prints.dispose(); };
   }
 
   load();

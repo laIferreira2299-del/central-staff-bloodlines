@@ -15,10 +15,13 @@ import { ANNOUNCEMENT_LIMITS, PRIORITIES, isAnnouncementFor, priorityLabel, vali
 import { renderMarkdownInto } from '../../core/render-md.js';
 import { toLocalInput } from './evaluations.js';
 import { renderMessage } from './message.js';
+import { applyControls, attachFormDraft, readControls } from '../draft.js';
 
 const MENTION_HINT = 'Marca o cargo do público se o ID dele estiver cadastrado em Webhooks do Discord › Cargos no Discord.';
 const DM_HINT = 'O bot manda a mesma mensagem no privado de cada membro ativo do público (pelo cargo no site). Quem fechou a DM não recebe.';
 const PRIORITY_CLASS = { normal: 'badge--status', importante: 'badge--revisar', urgente: 'badge--urgent' };
+// Marcar "Enviar no Discord" ou "no privado" nunca volta sozinho do rascunho: evita envio sem querer.
+const DRAFT_SKIP = ['ann-discord', 'ann-dm', 'ann-discord-webhook'];
 const fromLocalInput = (v) => (v ? new Date(v).toISOString() : null);
 
 export function renderAnnouncements(app) {
@@ -32,6 +35,7 @@ export function renderAnnouncements(app) {
   const listEl = h('div', { class: 'ann-list', id: 'ann-list' }, h('p', { class: 'panel-text' }, 'Carregando…'));
   const formHost = h('div', {});
   let hooks = null; // webhooks ativos de Avisos (null = carregando)
+  let draft = null; // rascunho automático do formulário aberto
 
   app.els.main.replaceChildren(h('div', { class: 'main-inner ann-page' },
     h('a', { class: 'back', href: '#/' }, icon('arrow-left'), 'Voltar para a lista'),
@@ -47,6 +51,7 @@ export function renderAnnouncements(app) {
 
   /* ---------- formulário (avisos.enviar) ---------- */
   function renderForm() {
+    draft?.stop();
     const a = editing;
     const now = new Date();
     const titleIn = h('input', { class: 'input', id: 'ann-title', maxlength: ANNOUNCEMENT_LIMITS.title, value: a?.title ?? '' });
@@ -96,7 +101,7 @@ export function renderAnnouncements(app) {
       errorEl,
       h('div', { class: 'panel-actions' },
         h('button', { type: 'submit', class: 'btn btn--primary', id: 'ann-save', 'data-requires-online': '' }, icon('send'), a ? 'Salvar aviso' : 'Publicar aviso'),
-        a && h('button', { type: 'button', class: 'btn btn--ghost', onclick: () => { editing = null; renderForm(); } }, 'Cancelar edição')));
+        a && h('button', { type: 'button', class: 'btn btn--ghost', onclick: () => { draft.clear(); editing = null; renderForm(); } }, 'Cancelar edição')));
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -121,6 +126,7 @@ export function renderAnnouncements(app) {
       const res = await app.adapter.saveAnnouncement(data);
       if (!alive) return;
       if (res.error) { if (res.error.code === 'VALIDATION') show(res.error.details?.errors ?? { _: res.error.message }); else app.reportError(res.error); return; }
+      draft.clear();
       toast(a ? 'Aviso salvo.' : 'Aviso publicado.');
       if (discordIn.checked || dmIn.checked) {
         await sendToDiscord(res.data.id, { channel: discordIn.checked, dm: dmIn.checked, webhookId: hookSel.value || hooks?.[0]?.id });
@@ -135,6 +141,10 @@ export function renderAnnouncements(app) {
     formHost.replaceChildren(h('section', { class: 'panel', 'aria-labelledby': 'ann-form-title' },
       h('h2', { class: 'block-title', id: 'ann-form-title' }, icon(a ? 'pencil' : 'speakerphone'), a ? 'Editar aviso' : 'Novo aviso'),
       form));
+    draft = attachFormDraft(app, `aviso:${a?.id ?? 'novo'}`, form, {
+      skip: DRAFT_SKIP, bannerId: 'ann-draft-banner',
+      hasContent: (v) => Boolean((v['ann-title'] ?? '').trim() || (v['ann-body'] ?? '').trim()),
+    });
     app.applyOnline();
   }
 
@@ -255,9 +265,14 @@ export function renderAnnouncements(app) {
     app.adapter.listDiscordWebhooks({ purpose: 'avisos' }).then((r) => {
       if (!alive) return;
       hooks = (r.data ?? []).filter((w) => w.active && w.purpose === 'avisos');
-      if (!editing) renderForm();
+      if (!editing) {
+        // Os canais chegaram: redesenha o formulário sem perder o que já foi digitado.
+        const typed = draft?.dirty() ? readControls(formHost, DRAFT_SKIP) : null;
+        renderForm();
+        if (typed) { applyControls(formHost, typed, DRAFT_SKIP); formHost.querySelector('#ann-draft-banner')?.remove(); }
+      }
       load();
     });
   } else load();
-  return () => { alive = false; };
+  return () => { alive = false; draft?.stop(); };
 }

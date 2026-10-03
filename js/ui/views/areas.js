@@ -9,6 +9,7 @@ import {
 } from '../../core/areas.js';
 import { ROLE_LABELS, ROLE_LIST } from '../../core/permissions.js';
 import { renderRichMarkdownInto } from '../../core/render-md.js';
+import { attachFormDraft } from '../draft.js';
 import { formField, showFieldErrors } from './gabarito.js';
 import { renderMessage } from './message.js';
 
@@ -114,6 +115,7 @@ export function renderAreas(app) {
 export function renderArea(app, slug) {
   if (!app.feature('areas')) return unavailable(app);
   let alive = true;
+  let draft = null; // rascunho automático do editor aberto
   const ctx = { area: null, procedures: [], team: [], tags: [], tab: 'procedimentos', editing: null, history: null, historyPage: 0 };
   const view = { query: '', tag: '', status: 'ativos' };
   const panel = h('div', { class: 'areas-panel', id: 'areas-panel' });
@@ -172,6 +174,8 @@ export function renderArea(app, slug) {
   }
 
   function drawPanel() {
+    draft?.stop();
+    draft = null;
     if (ctx.tab === 'procedimentos') return ctx.editing ? drawEditor() : drawProcedures();
     if (ctx.tab === 'equipe') return drawTeam();
     if (ctx.tab === 'controle') return drawControl();
@@ -270,7 +274,7 @@ export function renderArea(app, slug) {
     const picked = new Set(p.tags ?? []);
     const tagBox = ctx.tags.length > 0 && h('fieldset', { class: 'areas-tagbox' }, h('legend', { class: 'field-label' }, 'Tags'),
       ctx.tags.map((t) => h('label', { class: 'areas-tagpick' },
-        h('input', { type: 'checkbox', checked: picked.has(t.id), onchange: (e) => { if (e.target.checked) picked.add(t.id); else picked.delete(t.id); } }), ' ', t.nome)));
+        h('input', { type: 'checkbox', id: `areas-f-tag-${t.id}`, checked: picked.has(t.id), onchange: (e) => { if (e.target.checked) picked.add(t.id); else picked.delete(t.id); } }), ' ', t.nome)));
     const preview = h('div', { class: 'md areas-preview', id: 'areas-preview', hidden: true });
     const general = h('p', { class: 'field-error', role: 'alert', hidden: true });
     const previewBtn = h('button', { type: 'button', class: 'btn btn--ghost', id: 'areas-preview-btn' }, icon('eye'), 'Pré-visualizar');
@@ -287,7 +291,7 @@ export function renderArea(app, slug) {
       fields.titulo.el, fields.status.el, tagBox,
       fields.conteudo.el, preview, general,
       h('div', { class: 'areas-editor-actions' }, previewBtn,
-        h('button', { type: 'button', class: 'btn btn--ghost', id: 'areas-cancel', onclick: () => { ctx.editing = null; drawPanel(); } }, 'Cancelar'), save));
+        h('button', { type: 'button', class: 'btn btn--ghost', id: 'areas-cancel', onclick: () => { draft?.clear(); ctx.editing = null; drawPanel(); } }, 'Cancelar'), save));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       save.disabled = true;
@@ -297,6 +301,7 @@ export function renderArea(app, slug) {
       save.disabled = false;
       if (!alive) return;
       if (res.error) { showFieldErrors(fields, general, res.error); return; }
+      draft?.clear();
       const at = ctx.procedures.findIndex((x) => x.id === res.data.id);
       if (at >= 0) ctx.procedures[at] = res.data; else ctx.procedures.push(res.data);
       ctx.editing = null;
@@ -305,6 +310,7 @@ export function renderArea(app, slug) {
       drawPanel();
     });
     panel.replaceChildren(form);
+    draft = attachFormDraft(app, `area-proc:${ctx.area.id}:${p.id ?? 'novo'}`, form, { bannerId: 'areas-draft-banner' });
     fields.titulo.input.focus();
   }
 
@@ -360,5 +366,5 @@ export function renderArea(app, slug) {
   }
 
   load();
-  return () => { alive = false; };
+  return () => { alive = false; draft?.stop(); };
 }
