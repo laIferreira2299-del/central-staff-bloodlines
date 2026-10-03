@@ -17,7 +17,8 @@ export function renderRules(app, id) {
   const canEdit = app.can('regras.editar');
   let alive = true;
   let rules = [];
-  const f = { q: '', category: '' };
+  // Guardado no estado do app: ao abrir uma regra e voltar, a categoria e a busca continuam como estavam.
+  const f = (app.state.rulesFilter ??= { q: '', category: '' });
   const slot = h('div', {});
   const chips = h('div', { class: 'rules-cats', id: 'rules-cats', role: 'group', 'aria-label': 'Filtrar por categoria' });
   const list = h('div', { class: 'rules-list', id: 'rules-list' }, h('p', { class: 'panel-text' }, 'Carregando…'));
@@ -30,6 +31,7 @@ export function renderRules(app, id) {
     if (!alive) return;
     if (res.error) { app.reportError(res.error, 'Não foi possível carregar o Livro de Regras.'); return; }
     rules = res.data;
+    if (f.category && !categoriesOf(rules).includes(f.category)) f.category = '';
     show();
   }
 
