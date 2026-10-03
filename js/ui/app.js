@@ -479,7 +479,14 @@ export function createApp(adapter, { isMock = false } = {}) {
     start() {
       bindSearch();
       bindConnection();
-      adapter.onAuthChange(() => syncAuth());
+      adapter.onAuthChange((session) => {
+        // Ao voltar para a janela (minimizar, Alt+Tab, outra aba) o Supabase reconfere a sessão e avisa
+        // "SIGNED_IN" de novo, mesmo sem mudança. Se é a mesma conta e a Central já está aberta, não
+        // remonta a tela (apagaria formulário, entrevista e análise em andamento): só relê cargo e permissões.
+        const sameUser = state.ready && state.staff && session?.user?.id && session.user.id === state.session?.user?.id;
+        if (sameUser) { state.session = session; app.refreshStaff(); return; }
+        syncAuth();
+      });
       syncAuth();
     },
   };
