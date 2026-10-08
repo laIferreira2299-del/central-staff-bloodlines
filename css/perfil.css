@@ -1,0 +1,76 @@
+/* Perfil da staff (plano 09): #/perfil e #/perfil/<discord_id>. Só tokens do projeto. */
+.perfil-page { display: grid; gap: var(--space-4); }
+.perfil-head { display: grid; gap: var(--space-3); }
+
+/* Banner: cor escolhida (--perfil-cor) com escurecimento sutil nas bordas. */
+.perfil-banner {
+  position: relative; height: 140px; border-radius: var(--radius-lg); border: 1px solid var(--border);
+  background-color: var(--perfil-cor, #8b0000); overflow: hidden;
+}
+.perfil-banner::after {
+  content: ''; position: absolute; inset: 0;
+  background:
+    linear-gradient(90deg, rgba(0,0,0,.45), transparent 22%, transparent 78%, rgba(0,0,0,.45)),
+    linear-gradient(180deg, transparent 55%, rgba(0,0,0,.4));
+}
+
+/* Avatar sobreposto ao banner (-44px). */
+.perfil-id { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: flex-start; margin: -44px var(--space-4) 0; position: relative; }
+.perfil-avatar {
+  flex: none; width: 88px; height: 88px; border-radius: 50%; border: 4px solid var(--surface-2);
+  background: var(--surface-2); object-fit: cover;
+}
+.perfil-avatar--initials {
+  display: flex; align-items: center; justify-content: center; font-family: var(--font-title); font-size: var(--fs-2xl); color: var(--text);
+}
+.perfil-id-info { display: grid; flex: 1 1 220px; gap: var(--space-1); min-width: 0; padding-top: 48px; }
+.perfil-name { font-family: var(--font-title); overflow-wrap: anywhere; }
+.perfil-badges { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; margin: 0; }
+.perfil-discord, .perfil-since { margin: 0; font-size: var(--fs-sm); color: var(--text-2); }
+.perfil-bio { margin: 0; padding: 0 var(--space-4); overflow-wrap: anywhere; }
+
+/* Números. */
+.perfil-stats { display: grid; gap: var(--space-3); grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.perfil-stat { display: grid; gap: var(--space-1); padding: var(--space-4); background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); }
+.perfil-stat-value { font-family: var(--font-title); font-size: var(--fs-2xl); line-height: 1; }
+.perfil-stat-label { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-2); }
+
+/* Edição. */
+.perfil-editor { display: grid; gap: var(--space-4); max-width: var(--reading-max); }
+.perfil-editor-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; }
+.perfil-swatches { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-2); }
+.perfil-swatch {
+  width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--border); background: var(--perfil-cor); cursor: pointer;
+}
+.perfil-swatch[aria-pressed="true"] { border-color: var(--text); box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-text); }
+.perfil-swatch:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.perfil-check { display: flex; gap: var(--space-2); align-items: flex-start; font-size: var(--fs-sm); }
+
+/* Abas (as mesmas do módulo de Áreas) e listas. */
+.perfil-tabs { flex-wrap: nowrap; overflow-x: auto; }
+.perfil-tabs .areas-tab { flex: none; }
+.perfil-cards, .perfil-history { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.perfil-card {
+  background: var(--surface-1); border: 1px solid var(--border); border-left: 4px solid var(--perfil-cor, var(--accent)); border-radius: var(--radius-sm);
+}
+.perfil-card-link { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; padding: var(--space-3) var(--space-4); color: inherit; text-decoration: none; }
+.perfil-card-link:hover { background: var(--surface-2); }
+.perfil-card-link:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.perfil-card-link strong { flex: 1 1 160px; overflow-wrap: anywhere; }
+.perfil-when { font-size: var(--fs-xs); color: var(--text-2); }
+.perfil-history-row {
+  display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); align-items: center;
+  padding: var(--space-3) var(--space-4); background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.perfil-history-text { flex: 1 1 220px; overflow-wrap: anywhere; }
+.perfil-history-area { color: var(--text-2); }
+.perfil-empty { margin: 0; padding: var(--space-6) var(--space-4); text-align: center; color: var(--text-2); background: var(--surface-1); border: 1px dashed var(--border); border-radius: var(--radius); }
+
+@media (max-width: 639px) {
+  .perfil-banner { height: 100px; }
+  .perfil-id { margin-top: -32px; }
+  .perfil-avatar { width: 64px; height: 64px; }
+  .perfil-avatar--initials { font-size: var(--fs-xl); }
+  .perfil-id-info { padding-top: 36px; }
+  .perfil-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

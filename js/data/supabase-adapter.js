@@ -23,6 +23,7 @@ import {
   AREA_DISCORD_ID, AREA_ERRORS, AREA_MANAGE_ERRORS, AREA_ROLES, DEFAULT_AREA_COLOR, DEFAULT_TAG_COLOR, areaProcedureAccess, areaSlug, historyRange,
   pickArea, pickAreaProcedure, pickAreaTag, validateArea, validateAreaProcedure, validateAreaTag,
 } from '../core/areas.js';
+import { PROFILE_ERRORS, pickProfileEdit, safeAvatar, validateProfileEdit } from '../core/perfil.js';
 import { CONFLICT_PREFIX, MEETING_STATUS_ERRORS, participantLabel, pickMeeting, validateMeeting } from '../core/agenda.js';
 import {
   PROPOSAL_ERRORS, PROPOSAL_NOTE_MAX, proposalStatus, validateAnnouncement, validateEvaluation,
@@ -1235,6 +1236,47 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       const { data, error, status } = await sb.from('meetings').delete().eq('id', id).select('id');
       if (error) return failFrom(error, status);
       return data?.length ? ok(null) : fail('NOT_FOUND', 'Reunião não encontrada.');
+    },
+
+    /* ----- Perfil da staff (20_perfil.sql) ----- */
+    async getProfile(discordId) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { data, error, status } = await sb.rpc('perfil_obter', { p_discord_id: String(discordId) });
+      if (error) return failFrom(error, status);
+      if (!data) return fail('NOT_FOUND', PROFILE_ERRORS.notFound);
+      return ok(data);
+    },
+
+    async listProfileHistory(discordId, { limit = 20, offset = 0 } = {}) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { data, error, status } = await sb.rpc('perfil_historico', { p_discord_id: String(discordId), p_limit: limit, p_offset: offset });
+      if (error) return failFrom(error, status);
+      return ok({ items: data?.items ?? [], total: Number(data?.total ?? 0) });
+    },
+
+    async updateMyProfile(patch = {}) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const next = pickProfileEdit(patch);
+      const { valid, errors } = validateProfileEdit(next);
+      if (!valid) return validation(errors);
+      const { error, status } = await sb.rpc('perfil_atualizar', {
+        p_bio: 'bio' in next ? next.bio : null,
+        p_banner_color: 'banner_color' in next ? next.banner_color : null,
+        p_perfil_publico: 'perfil_publico' in next ? next.perfil_publico : null,
+      });
+      return error ? failFrom(error, status) : ok(null);
+    },
+
+    async syncMyAvatar(url) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const clean = safeAvatar(url);
+      if (!clean) return validation({ _: PROFILE_ERRORS.avatar });
+      const { error, status } = await sb.rpc('perfil_sincronizar_avatar', { p_url: clean });
+      return error ? failFrom(error, status) : ok(null);
     },
 
     /* ----- Áreas da Staff (19_areas.sql) ----- */

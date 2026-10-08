@@ -20,6 +20,9 @@ export function renderUser(app) {
     h('div', { class: 'user-info' },
       h('span', { class: 'user-name' }, name),
       h('span', { class: `role-badge role-badge--${staff?.role}` }, roleLabel(staff?.role))),
+    app.feature('perfil') && h('a', {
+      class: 'icon-btn', href: '#/perfil', id: 'nav-perfil', 'aria-label': 'Meu perfil', title: 'Meu perfil',
+    }, icon('user-circle')),
     app.feature('avisos') && h('a', {
       class: 'icon-btn icon-btn--count', href: '#/avisos', id: 'nav-announcements',
       'aria-label': unread ? `Avisos (${unread} não lidos)` : 'Avisos', title: 'Avisos',
@@ -48,6 +51,7 @@ export function navGroups(app) {
       id: 'inicio', title: 'Início',
       items: [
         { href: '#/painel', ico: 'layout-grid', label: 'Início', count: (c.proposals ?? 0) + (c.evaluations ?? 0), self: true },
+        app.feature('perfil') && { href: '#/perfil', ico: 'user-circle', label: 'Meu Perfil', hint: 'Sua apresentação, suas áreas, reuniões e o que você já fez.' },
         app.feature('avisos') && { href: '#/avisos', ico: 'bell', label: 'Avisos', count: c.announcements ?? 0, hint: app.can('avisos.enviar') ? 'Ler os avisos da Direção, criar novos e ver quem já leu.' : 'Avisos da Direção para a equipe.' },
       ],
     },

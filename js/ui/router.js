@@ -38,6 +38,8 @@ const ROUTES = [
   ['areas', /^#\/areas$/],
   ['areasAdmin', /^#\/areas\/gerenciar$/],
   ['area', /^#\/areas\/([a-z0-9-]+)$/],
+  // Perfil da staff
+  ['perfil', /^#\/perfil(?:\/([0-9]{17,20}))?$/],
 ];
 
 /** @returns {{ name: string, slug?: string, hash: string }} */

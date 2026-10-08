@@ -55,6 +55,7 @@ export function renderMember(app, discordId) {
           row('Cargo', roleBadge(m.role), ` nível ${roleLevel(m.role)} de 8`),
           row('Equipes', (m.teams ?? []).length ? h('span', { class: 'staff-tags' }, m.teams.map(teamBadge)) : 'Nenhuma'),
           row('Situação', statusBadge(m.active)),
+          app.feature('perfil') && row('Perfil', h('a', { href: `#/perfil/${m.discord_id}`, id: 'member-profile-link' }, 'Abrir o perfil')),
           row('Na staff desde', m.created_at ? formatDate(m.created_at) : 'Sem registro'))),
 
       h('section', { class: 'panel', 'aria-labelledby': 'member-perms-title' },

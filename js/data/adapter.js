@@ -342,6 +342,16 @@
  * @property {(f?: { areaId?: string, actorId?: string, acao?: string, from?: string, to?: string, limit?: number, offset?: number }) => Result<{ items: object[], total: number }>} listAllAreaHistory
  *           Histórico de todas as áreas (inclusive das apagadas). `from` e `to` são datas AAAA-MM-DD (`to` inclusivo, horário de Brasília).
  *
+ * Perfil da staff (20_perfil.sql; regras em js/core/perfil.js). Staff ativa; privacidade aplicada no banco.
+ * @property {(discordId: string) => Result<object>} getProfile    Staff. { discord_id, display_name, role, level, teams, active, entrou_em, bio,
+ *           banner_color, perfil_publico, avatar_url, self, reunioes_visiveis, stats: { reunioes_criadas, reunioes_convocado, areas, procedimentos, acoes },
+ *           areas, reunioes, procedimentos }. NOT_FOUND (PROFILE_ERRORS.notFound) se a pessoa não existe; { privado: true } se o perfil é privado e quem
+ *           pede não é o dono nem tem equipe.gerenciar. Áreas, procedimentos e histórico só aparecem para quem já enxerga a área; reuniões só com agenda.ler ou agenda.gerenciar.
+ * @property {(discordId: string, o?: { limit?: number, offset?: number }) => Result<{ items: object[], total: number }>} listProfileHistory
+ *           Staff. Ações da pessoa no histórico de áreas, mais recentes primeiro. Mensagens do Discord só no próprio perfil e para a gestão.
+ * @property {(patch: { bio?: string, banner_color?: string, perfil_publico?: boolean }) => Result<null>} updateMyProfile    Staff. Só o próprio perfil. VALIDATION por campo.
+ * @property {(url: string) => Result<null>} syncMyAvatar    Staff. Guarda o avatar do Discord (só https://cdn.discordapp.com/...) para os outros verem. Melhor esforço.
+ *
  * Etapa 10 · produtividade (13_produtividade.sql; conta em js/core/productivity.js)
  * @property {(p: { from: string, to: string }) => Result<Productivity>} getProductivity   produtividade.ver. to exclusivo.
  * @property {() => Result<Array<{ discord_id: string, display_name: string }>>} listStaffNames   Staff: nomes de toda a equipe.
@@ -377,6 +387,7 @@ export const ADAPTER_METHODS = Object.freeze([
   'listCharacters', 'getCharacter', 'saveCharacter', 'setCharacterPhoto', 'addCharacterNote', 'deleteCharacterNote',
   'listRules', 'saveRule', 'deleteRule',
   'listMeetings', 'saveMeeting', 'deleteMeeting', 'checkMeetingConflict', 'startMeeting', 'endMeeting', 'announceMeeting', 'notifyMeeting',
+  'getProfile', 'listProfileHistory', 'updateMyProfile', 'syncMyAvatar',
   'getProductivity', 'listStaffNames',
 ]);
 
@@ -442,7 +453,7 @@ export const WEBHOOK_COLUMNS = Object.freeze([
 ]);
 
 /** Módulos que o banco pode ter (Staff.features). */
-export const FEATURES = Object.freeze(['agenda', 'allowlist', 'areas', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos', 'discord_cargos', 'lore', 'produtividade', 'regras']);
+export const FEATURES = Object.freeze(['agenda', 'allowlist', 'areas', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos', 'discord_cargos', 'lore', 'perfil', 'produtividade', 'regras']);
 
 /** Campos que o cliente pode definir. Todo o resto é do servidor. */
 export const EDITABLE_FIELDS = Object.freeze([

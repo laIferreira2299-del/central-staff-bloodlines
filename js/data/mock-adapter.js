@@ -20,10 +20,11 @@ import {
 import { PRODUCTIVITY_ERRORS, aggregateProductivity } from '../core/productivity.js';
 import { RULE_ERRORS, pickRule, sortRules, validateRule } from '../core/rules.js';
 import {
-  AREA_ERRORS, AREA_MANAGE_ERRORS, AREA_ROLES, DEFAULT_AREA_COLOR, DEFAULT_TAG_COLOR, areaProcedureAccess, areaSlug, historyRange, pickArea,
+  AREA_ERRORS, AREA_MANAGE_ERRORS, AREA_ROLES, areaEventName, DEFAULT_AREA_COLOR, DEFAULT_TAG_COLOR, areaProcedureAccess, areaSlug, historyRange, pickArea,
   pickAreaProcedure, pickAreaTag, validateArea, validateAreaProcedure, validateAreaTag,
 } from '../core/areas.js';
-import { MEETING_STATUS_ERRORS, findMeetingConflict, meetingConflictMessage, participantLabel, pickMeeting, sortMeetings, validateMeeting } from '../core/agenda.js';
+import { PROFILE_ERRORS, pickProfileEdit, safeAvatar, validateProfileEdit } from '../core/perfil.js';
+import { MEETING_STATUS_ERRORS, audienceOf, findMeetingConflict, meetingConflictMessage, participantLabel, pickMeeting, sortMeetings, validateMeeting } from '../core/agenda.js';
 import {
   PROPOSAL_ERRORS, contentChanged, proposalStatus, EVALUATION_ERRORS, evaluationChangeError, validateEvaluation,
   isPeriodOpen, validateAnnouncement, isAnnouncementFor, PROPOSAL_NOTE_MAX,
@@ -1712,6 +1713,98 @@ export function createMockAdapter({
         logArea(staff, area, AREA_HISTORY_ACTIONS[tipo], 'comunicacao', comm.id, { tipo, canal_id: comm.canal_id, enviados, falhas: 0, conteudo: text.slice(0, 300) });
         save();
         return ok({ sent_at: at, enviados, falhas: 0, detalhes: clone(detalhes), registrado: true });
+      });
+    },
+
+    /* ----- Perfil da staff (20_perfil.sql; regras em js/core/perfil.js) ----- */
+    async getProfile(discordId) {
+      return run('getProfile', 'staff', async ({ staff, can }) => {
+        const target = state.staff.find((x) => x.discord_id === String(discordId));
+        const manager = can('equipe.gerenciar');
+        const self = Boolean(target) && target.discord_id === staff.discord_id;
+        if (!target || (!target.active && !manager && !self)) return fail('NOT_FOUND', PROFILE_ERRORS.notFound);
+        const extra = (state.profiles ??= {})[target.discord_id] ?? {};
+        if (extra.perfil_publico === false && !self && !manager) return ok({ privado: true });
+        const sees = (areaId) => can('areas.gerenciar') || state.areaMembers.some((m) => m.area_id === areaId && m.discord_id === staff.discord_id);
+        const areaOf = (id) => state.areas.find((a) => a.id === id);
+        const mine = state.areaMembers.filter((m) => m.discord_id === target.discord_id && sees(m.area_id));
+        const areas = mine.map((m) => ({ ...areaOf(m.area_id), papel: m.papel, entrou_em: m.entrou_em })).filter((a) => a.id)
+          .sort((a, b) => a.ordem - b.ordem || a.nome.localeCompare(b.nome, 'pt-BR'))
+          .map((a) => ({ id: a.id, nome: a.nome, slug: a.slug, cor: a.cor, icone: a.icone, status: a.status, papel: a.papel, entrou_em: a.entrou_em }));
+        const sawAgenda = can('agenda.ler') || can('agenda.gerenciar');
+        const asRow = [{ ...target, active: true }];
+        const covered = (m) => audienceOf(m.participants, asRow).has(target.discord_id);
+        const meetings = sawAgenda ? state.meetings.filter((m) => m.created_by === target.discord_id || covered(m)) : [];
+        const reunioes = sortMeetings(meetings).reverse().slice(0, 50).map((m) => ({
+          id: m.id, title: m.title, description: m.description ?? null, starts_at: m.starts_at, status: m.status ?? 'agendada',
+          relacao: m.created_by === target.discord_id ? 'criada' : 'convocado',
+        }));
+        const procs = state.areaProcedures.filter((p) => p.criado_por === target.discord_id && p.status !== 'arquivado'
+          && (p.status === 'publicado' || self) && sees(p.area_id));
+        const procedimentos = procs.sort((a, b) => b.atualizado_em.localeCompare(a.atualizado_em)).slice(0, 50).map((p) => {
+          const area = areaOf(p.area_id);
+          return { id: p.id, titulo: p.titulo, conteudo: p.conteudo, status: p.status, area_id: p.area_id, area_nome: area?.nome ?? '', area_slug: area?.slug ?? '', criado_em: p.criado_em, atualizado_em: p.atualizado_em };
+        });
+        const acoes = state.areaHistory.filter((e) => e.ator_id === target.discord_id && e.entidade !== 'comunicacao').length;
+        return ok({
+          discord_id: target.discord_id, display_name: target.display_name, role: target.role, level: roleLevel(target.role),
+          teams: [...(target.teams ?? [])], active: target.active, entrou_em: target.created_at ?? null,
+          bio: extra.bio ?? null, banner_color: extra.banner_color ?? '#8b0000', perfil_publico: extra.perfil_publico ?? true,
+          avatar_url: extra.avatar_url ?? null, self, reunioes_visiveis: sawAgenda,
+          stats: {
+            reunioes_criadas: sawAgenda ? state.meetings.filter((m) => m.created_by === target.discord_id).length : null,
+            reunioes_convocado: sawAgenda ? state.meetings.filter((m) => m.created_by !== target.discord_id && covered(m)).length : null,
+            areas: state.areaMembers.filter((m) => m.discord_id === target.discord_id && areaOf(m.area_id)?.status === 'ativa').length,
+            procedimentos: state.areaProcedures.filter((p) => p.criado_por === target.discord_id && p.status !== 'arquivado').length,
+            acoes,
+          },
+          areas, reunioes, procedimentos,
+        });
+      });
+    },
+
+    async listProfileHistory(discordId, { limit = 20, offset = 0 } = {}) {
+      return run('listProfileHistory', 'staff', async ({ staff, can }) => {
+        const target = state.staff.find((x) => x.discord_id === String(discordId));
+        if (!target) return ok({ items: [], total: 0 });
+        const manager = can('equipe.gerenciar');
+        const self = target.discord_id === staff.discord_id;
+        const extra = (state.profiles ??= {})[target.discord_id] ?? {};
+        if (extra.perfil_publico === false && !self && !manager) return ok({ items: [], total: 0 });
+        const privileged = self || manager || can('areas.gerenciar');
+        const all = state.areaHistory
+          .filter((e) => e.ator_id === target.discord_id && (e.entidade !== 'comunicacao' || privileged)
+            && (privileged || (e.area_id && state.areaMembers.some((m) => m.area_id === e.area_id && m.discord_id === staff.discord_id))))
+          .sort((a, b) => b.id - a.id);
+        const size = Math.max(1, Math.min(Number(limit) || 20, 100));
+        const from = Math.max(0, Number(offset) || 0);
+        const items = all.slice(from, from + size).map((e) => ({ id: e.id, acao: e.acao, entidade: e.entidade, area_nome: e.area_nome, criado_em: e.criado_em, nome: areaEventName(e) }));
+        return ok({ items, total: all.length });
+      });
+    },
+
+    async updateMyProfile(patch = {}) {
+      return run('updateMyProfile', 'staff', async ({ staff }) => {
+        const next = pickProfileEdit(patch);
+        const { valid, errors } = validateProfileEdit(next);
+        if (!valid) return validationError(errors);
+        const row = ((state.profiles ??= {})[staff.discord_id] ??= {});
+        if ('bio' in next) row.bio = next.bio || null;
+        if ('banner_color' in next) row.banner_color = next.banner_color;
+        if ('perfil_publico' in next) row.perfil_publico = next.perfil_publico;
+        row.atualizado_em = nowIso();
+        save();
+        return ok(null);
+      });
+    },
+
+    async syncMyAvatar(url) {
+      return run('syncMyAvatar', 'staff', async ({ staff }) => {
+        const clean = safeAvatar(url);
+        if (!clean) return validationError({ _: PROFILE_ERRORS.avatar });
+        const row = ((state.profiles ??= {})[staff.discord_id] ??= {});
+        if (row.avatar_url !== clean) { row.avatar_url = clean; save(); }
+        return ok(null);
       });
     },
 
