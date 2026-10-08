@@ -1646,3 +1646,17 @@ body {
 .al-interview-side .al-drop { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; text-align: center; padding: 8px var(--space-2); row-gap: 0; }
 .al-interview-side .al-drop > * { grid-row: auto; }
 .al-interview-side .al-drop > span { font-size: var(--fs-xs); line-height: 1.35; }
+
+/* ---------- Menu em grupos (Início, Consulta, Trabalho, Equipe, Configuração) ---------- */
+.only-mobile { display: none; }
+.sidebar-group { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; min-width: 0; }
+.sidebar-procs, .sidebar-procs-body { min-width: 0; }
+.sidebar-procs-body { display: none; padding-left: var(--space-3); }
+.sidebar-procs.is-open .sidebar-procs-body { display: grid; gap: 2px; }
+.hub-group { margin-bottom: var(--space-8); }
+.hub-group .section-title { margin-bottom: var(--space-3); }
+@media (max-width: 899.98px) {
+  .only-mobile { display: inline-flex; }
+  .sidebar-procs-toggle { display: none; }
+  .sidebar-procs-body, .sidebar-procs.is-open .sidebar-procs-body { display: block; padding-left: 0; }
+}

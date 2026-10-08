@@ -24,7 +24,7 @@ export function renderWebhooks(app) {
   const formSlot = h('div', {});
   const rolesSlot = h('div', {});
   app.els.main.replaceChildren(h('div', { class: 'main-inner webhooks-page' },
-    h('a', { class: 'back', href: '#/painel' }, icon('arrow-left'), 'Painel da staff'),
+    h('a', { class: 'back', href: '#/painel' }, icon('arrow-left'), 'Início'),
     h('header', { class: 'page-head' },
       h('h1', { class: 'page-title', tabindex: '-1' }, 'Webhooks do Discord'),
       h('p', { class: 'page-sub' }, 'Canais para onde a Central envia os resultados de allowlist e entrevistas. O endereço do webhook fica guardado no banco e nunca aparece na tela.'),

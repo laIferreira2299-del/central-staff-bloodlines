@@ -68,7 +68,7 @@ export function renderProductivity(app) {
   } }, icon('file-spreadsheet'), 'Exportar CSV');
 
   app.els.main.replaceChildren(h('div', { class: 'main-inner productivity-page' },
-    h('a', { class: 'back', href: '#/painel' }, icon('arrow-left'), 'Painel da staff'),
+    h('a', { class: 'back', href: '#/painel' }, icon('arrow-left'), 'Início'),
     h('header', { class: 'page-head' },
       h('h1', { class: 'page-title', tabindex: '-1' }, 'Produtividade da staff'),
       h('p', { class: 'page-sub' }, 'Quem mais lê allowlist e faz entrevista. Conta a partir do dia em que o módulo de Allowlist entrou no site. Datas no horário de Brasília.'),
