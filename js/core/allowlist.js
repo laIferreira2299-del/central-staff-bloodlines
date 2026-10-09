@@ -602,7 +602,7 @@ export const ANNOUNCEMENT_DISCORD = Object.freeze({
   colors: Object.freeze({ normal: 0x5B8DEF, importante: 0xE0A43A, urgente: 0xC8365A }),
   roles: Object.freeze({
     allowlist: 'Allowlist', lore: 'Lore', suporte: 'Suporte', moderador: 'Moderador',
-    head_staff: 'Head Staff', admin: 'Administrador', manager: 'Manager', ceo: 'CEO',
+    head_staff: 'Head Staff', admin: 'Resp. Equipe', manager: 'Administrador', ceo: 'CEO',
   }),
 });
 const SITE_URL = /^https:\/\/[^\s#?]{1,300}$/;

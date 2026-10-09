@@ -24,13 +24,16 @@ import {
   pickAreaProcedure, pickAreaTag, validateArea, validateAreaProcedure, validateAreaTag,
 } from '../core/areas.js';
 import { PROFILE_ERRORS, pickProfileEdit, safeAvatar, validateProfileEdit } from '../core/perfil.js';
+import {
+  DIRETORIA_ERRORS, pickDirectorEvaluation, promotionRulesError, reasonError, validateDirectorEvaluation, validateOccurrence, weekOf,
+} from '../core/diretoria.js';
 import { MEETING_STATUS_ERRORS, audienceOf, findMeetingConflict, meetingConflictMessage, participantLabel, pickMeeting, sortMeetings, validateMeeting } from '../core/agenda.js';
 import {
   PROPOSAL_ERRORS, contentChanged, proposalStatus, EVALUATION_ERRORS, evaluationChangeError, validateEvaluation,
   isPeriodOpen, validateAnnouncement, isAnnouncementFor, PROPOSAL_NOTE_MAX,
 } from '../core/workflow.js';
 import {
-  CEO, PERMISSIONS, canReadAudience, defaultGrid, permissionChangesError, permissionsOf, roleLevel, staffChangeError,
+  CEO, PERMISSIONS, ROLE_CODES, canReadAudience, defaultGrid, permissionChangesError, permissionsOf, roleLevel, staffChangeError,
 } from '../core/permissions.js';
 
 /**
@@ -96,8 +99,14 @@ function allowlistState(seed, nowIso) {
     ...rulesState(),
     ...agendaState(),
     ...areasState(nowIso),
+    ...diretoriaState(),
   };
 }
+
+/** Painel da Diretoria: vazio no começo (como o 21_diretoria.sql). */
+const diretoriaState = () => ({
+  dirEvaluations: [], occurrences: [], roleHistory: [], promotionRules: { conteudo: '', atualizado_por: null, atualizado_em: null },
+});
 
 /** Etapa 9: personagens, histórico e anotações (vazios no começo, como o 12_lore.sql). */
 const loreState = () => ({ characters: [], characterRevisions: [], characterNotes: [] });
@@ -164,6 +173,7 @@ export function createMockAdapter({
       if (!parsed.rules) Object.assign(parsed, rulesState());
       if (!parsed.meetings) Object.assign(parsed, agendaState());
       if (!parsed.areas) Object.assign(parsed, areasState(nowIso()));
+      if (!parsed.dirEvaluations) Object.assign(parsed, diretoriaState());
       return parsed;
     } catch { return null; }
   }
@@ -278,6 +288,14 @@ export function createMockAdapter({
 
   const touchesArchive = (from, to) => from === 'arquivado' || to === 'arquivado';
   const staffAudit = (m) => ({ display_name: m.display_name, role: m.role, teams: [...(m.teams ?? [])], active: m.active });
+
+  /** Histórico de cargos (no banco, trigger em staff_members do 21_diretoria.sql). */
+  function logRoleChange(membroId, from, to, motivo, actor) {
+    state.roleHistory.push({
+      id: state.roleHistory.length + 1, membro_id: membroId, cargo_anterior: from, cargo_novo: to,
+      motivo: motivo || null, feito_por: actor?.discord_id ?? 'sistema', feito_em: nowIso(),
+    });
+  }
 
   /** Registro de auditoria (no banco, feito por trigger; aqui, pelo "servidor" simulado). */
   function audit(actor, entity, entityId, action, before, after) {
@@ -653,6 +671,7 @@ export function createMockAdapter({
         const before = staffAudit(member);
         Object.assign(member, patch);
         if (JSON.stringify(before) !== JSON.stringify(staffAudit(member))) audit(staff, 'membro', discordId, 'alterado', before, staffAudit(member));
+        if (before.role !== member.role) logRoleChange(member.discord_id, before.role, member.role, null, staff);
         save();
         return ok(presentStaff(member));
       });
@@ -1805,6 +1824,165 @@ export function createMockAdapter({
         const row = ((state.profiles ??= {})[staff.discord_id] ??= {});
         if (row.avatar_url !== clean) { row.avatar_url = clean; save(); }
         return ok(null);
+      });
+    },
+
+    /* ----- Painel da Diretoria (21_diretoria.sql; regras em js/core/diretoria.js) ----- */
+    async getDiretoriaMembers() {
+      return run('getDiretoriaMembers', 'diretoria.ver', async () => {
+        const evalsOf = (id) => state.dirEvaluations.filter((e) => e.avaliado_id === id).sort((a, b) => b.criado_em.localeCompare(a.criado_em));
+        const list = state.staff.map((s) => {
+          const evals = evalsOf(s.discord_id);
+          const last3 = evals.slice(0, 3);
+          const changes = state.roleHistory.filter((x) => x.membro_id === s.discord_id).map((x) => x.feito_em).sort();
+          return {
+            discord_id: s.discord_id, display_name: s.display_name, role: s.role, teams: [...(s.teams ?? [])], active: s.active,
+            created_at: s.created_at ?? null, avatar_url: (state.profiles ?? {})[s.discord_id]?.avatar_url ?? null,
+            areas: state.areaMembers.filter((m) => m.discord_id === s.discord_id)
+              .map((m) => state.areas.find((a) => a.id === m.area_id)).filter((a) => a && a.status === 'ativa')
+              .sort((a, b) => a.ordem - b.ordem || a.nome.localeCompare(b.nome, 'pt-BR')).map((a) => ({ nome: a.nome, cor: a.cor })),
+            media: last3.length ? Math.round((last3.reduce((n, e) => n + e.nota_geral, 0) / last3.length) * 10) / 10 : null,
+            avaliacoes: evals.length, ultima_avaliacao: evals[0]?.criado_em ?? null,
+            ocorrencias: state.occurrences.filter((o) => o.membro_id === s.discord_id).length,
+            cargo_desde: changes.at(-1) ?? s.created_at ?? null,
+          };
+        });
+        return ok(list.sort((a, b) => roleLevel(b.role) - roleLevel(a.role) || a.display_name.localeCompare(b.display_name, 'pt-BR')));
+      });
+    },
+
+    async listDirectorEvaluations() {
+      return run('listDirectorEvaluations', 'diretoria.ver', async () => ok(state.dirEvaluations
+        .map((e) => ({ ...clone(e), avaliado_nome: nameOf(e.avaliado_id), avaliador_nome: nameOf(e.avaliador_id) }))
+        .sort((a, b) => b.criado_em.localeCompare(a.criado_em))));
+    },
+
+    async saveDirectorEvaluation(input) {
+      return run('saveDirectorEvaluation', 'diretoria.ver', async ({ staff }) => {
+        const next = pickDirectorEvaluation(input);
+        const target = state.staff.find((x) => x.discord_id === next.avaliado_id) ?? null;
+        const errors = validateDirectorEvaluation(staff, target, next);
+        if (Object.keys(errors).length) return validationError(errors);
+        const row = { id: uuid(), ...next, comentario: next.comentario || null, avaliador_id: staff.discord_id, criado_em: nowIso() };
+        state.dirEvaluations.push(row);
+        save();
+        return ok({ ...clone(row), avaliado_nome: nameOf(row.avaliado_id), avaliador_nome: nameOf(row.avaliador_id) });
+      });
+    },
+
+    async listOccurrences() {
+      return run('listOccurrences', 'diretoria.ver', async () => ok(state.occurrences
+        .map((o) => ({ ...clone(o), membro_nome: nameOf(o.membro_id), feito_por_nome: nameOf(o.feito_por) }))
+        .sort((a, b) => b.feito_em.localeCompare(a.feito_em))));
+    },
+
+    async saveOccurrence(input = {}) {
+      return run('saveOccurrence', 'diretoria.ver', async ({ staff }) => {
+        const next = { membro_id: String(input?.membro_id ?? '').trim(), tipo: String(input?.tipo ?? ''), descricao: String(input?.descricao ?? '').trim() };
+        const target = state.staff.find((x) => x.discord_id === next.membro_id) ?? null;
+        const errors = validateOccurrence(staff, target, next);
+        if (Object.keys(errors).length) return validationError(errors);
+        const row = { id: uuid(), ...next, feito_por: staff.discord_id, feito_em: nowIso() };
+        state.occurrences.push(row);
+        save();
+        return ok({ ...clone(row), membro_nome: nameOf(row.membro_id), feito_por_nome: nameOf(row.feito_por) });
+      });
+    },
+
+    async listRoleHistory({ memberId = '', limit = 25, offset = 0 } = {}) {
+      return run('listRoleHistory', 'diretoria.ver', async () => {
+        const all = state.roleHistory.filter((x) => !memberId || x.membro_id === memberId)
+          .sort((a, b) => b.feito_em.localeCompare(a.feito_em) || b.id - a.id);
+        const size = Math.max(1, Math.min(Number(limit) || 25, 100));
+        const from = Math.max(0, Number(offset) || 0);
+        return ok({
+          items: all.slice(from, from + size).map((x) => ({ ...clone(x), membro_nome: nameOf(x.membro_id), feito_por_nome: nameOf(x.feito_por) })),
+          total: all.length,
+        });
+      });
+    },
+
+    async changeMemberRole(discordId, role, motivo = '') {
+      return run('changeMemberRole', 'equipe.gerenciar', async ({ staff }) => {
+        const member = state.staff.find((s) => s.discord_id === discordId);
+        if (!member) return validationError({ _: DIRETORIA_ERRORS.member });
+        const why = reasonError(motivo);
+        if (why) return validationError({ motivo: why });
+        if (!ROLE_CODES.includes(role)) return validationError({ role: DIRETORIA_ERRORS.roleUnknown });
+        if (member.role === role) return validationError({ role: DIRETORIA_ERRORS.sameRole });
+        const blocked = staffChangeError(staff, member, { ...member, role }, otherActiveCeos(discordId));
+        if (blocked) return validationError({ _: blocked });
+        const before = staffAudit(member);
+        member.role = role;
+        audit(staff, 'membro', discordId, 'alterado', before, staffAudit(member));
+        logRoleChange(discordId, before.role, role, String(motivo ?? '').trim(), staff);
+        save();
+        return ok(presentStaff(member));
+      });
+    },
+
+    async getDiretoriaActivity({ from, to } = {}) {
+      return run('getDiretoriaActivity', 'diretoria.ver', async () => {
+        const a = Date.parse(from);
+        const b = Date.parse(to);
+        if (!(b > a) || b - a > 400 * 86400_000) return validationError({ _: DIRETORIA_ERRORS.period400 });
+        const acts = [];
+        const add = (who, tipo, iso) => {
+          const t = iso ? Date.parse(iso) : NaN;
+          if (t >= a && t < b && state.staff.some((s) => s.discord_id === who)) acts.push({ who, tipo, iso });
+        };
+        for (const e of state.alEvaluations) {
+          add(e.created_by, e.kind === 'allowlist' ? 'allowlist' : 'entrevista', e.created_at);
+          if (e.kind !== 'entrevista') continue;
+          for (const p of state.alParticipants) {
+            if (p.evaluation_id === e.id && p.role !== 'acompanhante' && p.discord_id !== e.created_by) add(p.discord_id, 'entrevista', e.created_at);
+          }
+        }
+        for (const p of state.procedures) add(p.created_by, 'procedimento', p.created_at);
+        for (const p of state.areaProcedures) add(p.criado_por, 'procedimento', p.criado_em);
+        for (const m of state.meetings) add(m.created_by, 'reuniao', m.created_at);
+        for (const m of state.areaMembers) add(m.discord_id, 'area_entrada', m.entrou_em);
+        for (const e of state.evaluations) add(e.evaluator_id, 'avaliacao_feita', e.submitted_at);
+        for (const e of state.dirEvaluations) add(e.avaliador_id, 'avaliacao_feita', e.criado_em);
+        for (const o of state.occurrences) add(o.membro_id, o.tipo, o.feito_em);
+        const per = new Map();
+        for (const x of acts) {
+          const key = `${weekOf(x.iso)}|${x.who}|${x.tipo}`;
+          per.set(key, (per.get(key) ?? 0) + 1);
+        }
+        const rows = [...per].map(([k, total]) => {
+          const [semana, discord_id, tipo] = k.split('|');
+          return { discord_id, tipo, semana, total };
+        });
+        return ok(rows.sort((x, y) => x.semana.localeCompare(y.semana) || x.discord_id.localeCompare(y.discord_id) || x.tipo.localeCompare(y.tipo)));
+      });
+    },
+
+    async getPromotionRules() {
+      return run('getPromotionRules', 'diretoria.ver', async () => {
+        const r = state.promotionRules;
+        return ok({ ...clone(r), atualizado_por_nome: r.atualizado_por ? nameOf(r.atualizado_por) : null });
+      });
+    },
+
+    async savePromotionRules(conteudo) {
+      return run('savePromotionRules', 'diretoria.gerenciar', async ({ staff }) => {
+        const text = String(conteudo ?? '');
+        const e = promotionRulesError(text);
+        if (e) return validationError({ conteudo: e });
+        state.promotionRules = { conteudo: text, atualizado_por: staff.discord_id, atualizado_em: nowIso() };
+        save();
+        return ok({ ...clone(state.promotionRules), atualizado_por_nome: nameOf(staff.discord_id) });
+      });
+    },
+
+    async getDirectorScore(discordId) {
+      return run('getDirectorScore', 'staff', async ({ staff, can }) => {
+        if (String(discordId) !== staff.discord_id && !can('diretoria.ver')) return ok(null);
+        const last3 = state.dirEvaluations.filter((e) => e.avaliado_id === String(discordId) && e.visivel_avaliado)
+          .sort((a, b) => b.criado_em.localeCompare(a.criado_em)).slice(0, 3);
+        if (!last3.length) return ok(null);
+        return ok({ media: Math.round((last3.reduce((n, e) => n + e.nota_geral, 0) / last3.length) * 10) / 10, total: last3.length });
       });
     },
 

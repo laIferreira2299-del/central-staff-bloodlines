@@ -52,7 +52,7 @@ export function renderEvaluations(app) {
     h('a', { class: 'back', href: '#/' }, icon('arrow-left'), 'Voltar para a lista'),
     h('header', { class: 'page-head' },
       h('h1', { class: 'page-title', tabindex: '-1' }, 'Avaliações da equipe'),
-      h('p', { class: 'page-sub' }, 'O Head Staff avalia membros de cargo abaixo durante o período aberto pela Direção. Só a Direção (Administradores, Managers e CEO) lê as avaliações enviadas; o membro avaliado nunca vê.')),
+      h('p', { class: 'page-sub' }, 'O Head Staff avalia membros de cargo abaixo durante o período aberto pela Direção. Só a Direção (Resp. Equipe, Administradores e CEO) lê as avaliações enviadas; o membro avaliado nunca vê.')),
     body));
 
   async function load() {
@@ -371,7 +371,7 @@ export function renderEvaluation(app, id) {
       if (status === 'enviada' && !sent) {
         const ok = await confirmDialog({
           title: 'Enviar a avaliação?',
-          message: 'Depois de enviada, a avaliação só pode ser lida pela Direção (Administradores, Managers e CEO). Você terá 24 horas para corrigir; depois disso, só poderá lê-la.',
+          message: 'Depois de enviada, a avaliação só pode ser lida pela Direção (Resp. Equipe, Administradores e CEO). Você terá 24 horas para corrigir; depois disso, só poderá lê-la.',
           confirmLabel: 'Enviar',
         });
         if (!ok) return;

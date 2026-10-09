@@ -40,7 +40,7 @@ export function renderPerfil(app, discordId) {
   }
   const target = discordId || app.state.staff.discord_id;
   let alive = true;
-  const ctx = { profile: null, tab: 'areas', history: null, editing: false };
+  const ctx = { profile: null, tab: 'areas', history: null, editing: false, score: null };
 
   const root = h('div', { class: 'main-inner perfil-page' }, h('p', { class: 'panel-text' }, 'Carregando…'));
   app.els.main.replaceChildren(root);
@@ -66,7 +66,10 @@ export function renderPerfil(app, discordId) {
       !p.perfil_publico && h('p', { class: 'banner banner--warn', id: 'perfil-private-note' },
         '⚠ Perfil privado: visível apenas para você e gestores.'),
       h('p', { class: 'perfil-bio', id: 'perfil-bio' }, p.bio || (p.self ? 'Escreva algo sobre você em "Editar perfil".' : 'Sem apresentação.')),
-      p.entrou_em && h('p', { class: 'perfil-since' }, `Na staff desde ${formatDate(p.entrou_em)}`));
+      p.entrou_em && h('p', { class: 'perfil-since' }, `Na staff desde ${formatDate(p.entrou_em)}`),
+      // Painel da Diretoria (plano 10): média das últimas 3 avaliações marcadas como visíveis. Só o dono e a Diretoria recebem.
+      ctx.score && h('p', { class: 'perfil-since perfil-nota', id: 'perfil-nota' },
+        `★ Nota da Diretoria: ${String(ctx.score.media.toFixed(1)).replace('.', ',')} (${ctx.score.total === 1 ? '1 avaliação' : `média das últimas ${ctx.score.total} avaliações`})`));
   }
 
   /* ---------- números ---------- */
@@ -237,8 +240,10 @@ export function renderPerfil(app, discordId) {
   }
 
   async function load() {
-    const r = await app.adapter.getProfile(target);
+    const wantsScore = app.feature('diretoria') && (target === app.state.staff.discord_id || app.can('diretoria.ver'));
+    const [r, score] = await Promise.all([app.adapter.getProfile(target), wantsScore ? app.adapter.getDirectorScore(target) : null]);
     if (!alive) return;
+    ctx.score = score && !score.error ? score.data : null;
     if (r.error) {
       const notFound = r.error.code === 'NOT_FOUND';
       renderMessage(app, { title: notFound ? 'Perfil não encontrado' : 'Não foi possível abrir o perfil', text: notFound ? PROFILE_ERRORS.notFound : errorText(r.error), back: true });

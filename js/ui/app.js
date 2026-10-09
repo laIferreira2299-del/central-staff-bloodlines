@@ -35,6 +35,7 @@ import { renderAgenda } from './views/agenda.js';
 import { renderArea, renderAreas } from './views/areas.js';
 import { renderAreasAdmin } from './views/areas-admin.js';
 import { renderPerfil } from './views/perfil.js';
+import { renderDiretoria } from './views/diretoria.js';
 
 const SEARCH_DEBOUNCE_MS = 150;
 const EMPTY_FILTERS = Object.freeze({ category: '', audience: '', status: '', favoritesOnly: false });
@@ -199,7 +200,7 @@ export function createApp(adapter, { isMock = false } = {}) {
     /** Re-renderiza a rota atual mantendo rolagem e foco (após mudança de dados). */
     render() {
       const route = router.route;
-      if (!state.ready || ['new', 'edit', 'permissions', 'evaluation', 'evaluations', 'announcements', 'proposal', 'alForm', 'interview', 'alHistory', 'alDetail', 'webhooks', 'gabarito', 'loreNames', 'characters', 'character', 'productivity', 'rules', 'agenda', 'areas', 'areasAdmin', 'area', 'perfil'].includes(route.name)) return;
+      if (!state.ready || ['new', 'edit', 'permissions', 'evaluation', 'evaluations', 'announcements', 'proposal', 'alForm', 'interview', 'alHistory', 'alDetail', 'webhooks', 'gabarito', 'loreNames', 'characters', 'character', 'productivity', 'rules', 'agenda', 'areas', 'areasAdmin', 'area', 'perfil', 'diretoria'].includes(route.name)) return;
       const key = document.activeElement?.dataset?.focusKey;
       const y = window.scrollY;
       showRoute(route, { navigated: false });
@@ -342,6 +343,7 @@ export function createApp(adapter, { isMock = false } = {}) {
       areasAdmin: () => renderAreasAdmin(app),
       area: () => renderArea(app, route.slug),
       perfil: () => renderPerfil(app, route.slug ?? null),
+      diretoria: () => renderDiretoria(app),
       notfound: () => renderMessage(app, { title: 'Página não encontrada', text: 'Volte para a lista de procedimentos.' }),
     };
     const mount = () => {

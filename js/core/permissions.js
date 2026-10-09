@@ -4,15 +4,15 @@
 // verdade é o banco (supabase/01, 02, 03 e 05); tests/db/banco.test.mjs confere que o
 // catálogo e as mensagens daqui são iguais aos do SQL.
 
-/** Os 8 cargos, do menor para o maior nível. `admin` mantém o código antigo; na tela é "Administrador". */
+/** Os 8 cargos, do menor para o maior nível. Os códigos antigos ficam: `admin` aparece como "Resp. Equipe" e `manager` como "Administrador" (plano 10). */
 export const ROLE_LIST = Object.freeze([
   Object.freeze({ code: 'allowlist', label: 'Allowlist', level: 1 }),
   Object.freeze({ code: 'lore', label: 'Lore', level: 2 }),
   Object.freeze({ code: 'suporte', label: 'Suporte', level: 3 }),
   Object.freeze({ code: 'moderador', label: 'Moderador', level: 4 }),
   Object.freeze({ code: 'head_staff', label: 'Head Staff', level: 5 }),
-  Object.freeze({ code: 'admin', label: 'Administrador', level: 6 }),
-  Object.freeze({ code: 'manager', label: 'Manager', level: 7 }),
+  Object.freeze({ code: 'admin', label: 'Resp. Equipe', level: 6 }),
+  Object.freeze({ code: 'manager', label: 'Administrador', level: 7 }),
   Object.freeze({ code: 'ceo', label: 'CEO', level: 8 }),
 ]);
 
@@ -20,7 +20,7 @@ export const ROLE_CODES = Object.freeze(ROLE_LIST.map((r) => r.code));
 export const ROLE_LABELS = Object.freeze(Object.fromEntries(ROLE_LIST.map((r) => [r.code, r.label])));
 export const CEO = 'ceo';
 
-/** Nível a partir do qual o cargo é da Direção (Administrador, Manager e CEO). */
+/** Nível a partir do qual o cargo é da Direção (Resp. Equipe, Administrador e CEO). */
 export const DIRECTION_LEVEL = 6;
 
 /** TAGs de equipe (opcionais): somam as permissões do cargo de mesmo nome, sem mudar o nível. */
@@ -65,6 +65,8 @@ export const PERMISSIONS = Object.freeze([
   { code: 'agenda.ler', description: 'Ver a Agenda de Reuniões', roles: ALL_BELOW_CEO },
   { code: 'agenda.gerenciar', description: 'Criar, editar e apagar reuniões da Agenda', roles: FROM_HEAD },
   { code: 'areas.gerenciar', description: 'Gerenciar as Áreas da Staff: áreas, membros, tags e mensagens', roles: DIRECTION },
+  { code: 'diretoria.ver', description: 'Abrir o Painel da Diretoria: avaliar, registrar ocorrências e ver o histórico de cargos', roles: DIRECTION },
+  { code: 'diretoria.gerenciar', description: 'Editar as regras de promoção e exportar a produtividade do Painel da Diretoria', roles: ['manager'] },
 ].map((p) => Object.freeze({ ceoOnly: false, ...p, roles: Object.freeze([...p.roles]) })));
 
 export const PERMISSION_CODES = Object.freeze(PERMISSIONS.map((p) => p.code));
@@ -110,9 +112,9 @@ export const STAFF_ERRORS = Object.freeze({
   selfRole: 'Você não pode alterar o próprio cargo. Peça a outra pessoa da Direção.',
   selfDeactivate: 'Você não pode desativar a própria conta. Peça a outra pessoa da Direção.',
   selfTeams: 'Você não pode alterar as próprias equipes. Peça a outra pessoa da Direção.',
-  manageDirection: 'Só o CEO pode gerenciar Administradores, Managers e CEOs.',
+  manageDirection: 'Só o CEO pode gerenciar Resp. Equipe, Administradores e CEOs.',
   manageAbove: 'Você só pode gerenciar membros de cargo abaixo do seu.',
-  assignDirection: 'Só o CEO pode nomear Administradores, Managers e CEOs.',
+  assignDirection: 'Só o CEO pode nomear Resp. Equipe, Administradores e CEOs.',
   assignAbove: 'Você só pode dar cargos abaixo do seu.',
   lastCeo: 'É preciso manter pelo menos um CEO ativo.',
   discordId: 'O Discord ID não pode ser alterado. Remova e cadastre de novo.',
@@ -169,7 +171,7 @@ export function describePermissionChange({ role, permission, allowed }) {
 
 /**
  * Maior nível que alguém pode gerenciar ou atribuir: o CEO pode tudo; os outros só abaixo
- * do próprio nível e nunca a Direção (Decisão 3: só o CEO mexe em Administrador e Manager).
+ * do próprio nível e nunca a Direção (Decisão 3: só o CEO mexe em Resp. Equipe e Administrador).
  */
 export function manageLimit(actorRole) {
   if (actorRole === CEO) return Infinity;

@@ -128,7 +128,7 @@ export function renderPermissions(app) {
     apply(result.data);
     toast('Permissões salvas.');
     saveBtn.focus();
-    // Quem salvou pode ter mudado as próprias permissões (ex.: um Manager autorizado).
+    // Quem salvou pode ter mudado as próprias permissões (ex.: um Administrador autorizado).
     await app.refreshStaff();
   }
 

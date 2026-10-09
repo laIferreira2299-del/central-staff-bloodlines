@@ -24,6 +24,9 @@ import {
   pickArea, pickAreaProcedure, pickAreaTag, validateArea, validateAreaProcedure, validateAreaTag,
 } from '../core/areas.js';
 import { PROFILE_ERRORS, pickProfileEdit, safeAvatar, validateProfileEdit } from '../core/perfil.js';
+import {
+  DIRETORIA_ERRORS, pickDirectorEvaluation, promotionRulesError, reasonError, validateDirectorEvaluation, validateOccurrence,
+} from '../core/diretoria.js';
 import { CONFLICT_PREFIX, MEETING_STATUS_ERRORS, participantLabel, pickMeeting, validateMeeting } from '../core/agenda.js';
 import {
   PROPOSAL_ERRORS, PROPOSAL_NOTE_MAX, proposalStatus, validateAnnouncement, validateEvaluation,
@@ -173,6 +176,24 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
     if (Array.isArray(data)) names = new Map(data.map((r) => [r.discord_id, r.display_name]));
   }
   const nameOf = (id) => (id ? names.get(id) ?? null : null);
+  /* ---------- Painel da Diretoria ---------- */
+  /** Mensagem do 21_diretoria.sql → campo do formulário. */
+  const DIRETORIA_FIELDS = {
+    [DIRETORIA_ERRORS.member]: '_', [DIRETORIA_ERRORS.evalSelf]: 'avaliado_id', [DIRETORIA_ERRORS.evalAbove]: 'avaliado_id',
+    [DIRETORIA_ERRORS.score]: 'nota_geral', [DIRETORIA_ERRORS.period]: 'periodo_fim', [DIRETORIA_ERRORS.comment]: 'comentario',
+    [DIRETORIA_ERRORS.occSelf]: 'membro_id', [DIRETORIA_ERRORS.occAbove]: 'membro_id', [DIRETORIA_ERRORS.occType]: 'tipo',
+    [DIRETORIA_ERRORS.occText]: 'descricao', [DIRETORIA_ERRORS.sameRole]: 'role', [DIRETORIA_ERRORS.roleUnknown]: 'role',
+    [DIRETORIA_ERRORS.reason]: 'motivo', [DIRETORIA_ERRORS.rules]: 'conteudo',
+  };
+  const presentDirectorEvaluation = (e) => ({
+    ...e, criado_em: new Date(e.criado_em).toISOString(),
+    ...Object.fromEntries(['nota_geral', 'nota_presenca', 'nota_qualidade', 'nota_colaboracao', 'nota_iniciativa'].map((k) => [k, Number(e[k])])),
+    avaliado_nome: nameOf(e.avaliado_id), avaliador_nome: nameOf(e.avaliador_id),
+  });
+  const presentOccurrence = (o) => ({
+    ...o, feito_em: new Date(o.feito_em).toISOString(), membro_nome: nameOf(o.membro_id), feito_por_nome: nameOf(o.feito_por),
+  });
+
   /* ---------- Etapas 8 e 9 ---------- */
   /** Erro KB422 com mensagem conhecida → erro no campo certo (o resto segue o mapError). */
   function fieldFail(error, status, byMessage) {
@@ -1277,6 +1298,140 @@ export function createSupabaseAdapter({ client, redirectTo } = {}) {
       if (!clean) return validation({ _: PROFILE_ERRORS.avatar });
       const { error, status } = await sb.rpc('perfil_sincronizar_avatar', { p_url: clean });
       return error ? failFrom(error, status) : ok(null);
+    },
+
+    /* ----- Painel da Diretoria (21_diretoria.sql) ----- */
+    async getDiretoriaMembers() {
+      const { error: g } = await guard('diretoria.ver');
+      if (g) return g;
+      const { data, error, status } = await sb.rpc('diretoria_membros');
+      if (error) return failFrom(error, status);
+      return ok((data ?? []).map((m) => ({
+        ...m, teams: [...(m.teams ?? [])], areas: m.areas ?? [], media: m.media == null ? null : Number(m.media),
+        avaliacoes: Number(m.avaliacoes ?? 0), ocorrencias: Number(m.ocorrencias ?? 0),
+      })));
+    },
+
+    async listDirectorEvaluations() {
+      const { error: g } = await guard('diretoria.ver');
+      if (g) return g;
+      const { data, error, status } = await sb.from('diretoria_avaliacoes').select('*').order('criado_em', { ascending: false });
+      if (error) return failFrom(error, status);
+      await loadNames();
+      return ok(data.map(presentDirectorEvaluation));
+    },
+
+    async saveDirectorEvaluation(input) {
+      const { staff, error: g } = await guard('diretoria.ver');
+      if (g) return g;
+      const next = pickDirectorEvaluation(input);
+      // A regra de alvo (cargo e situação do avaliado) é do banco; aqui só os campos.
+      const errors = validateDirectorEvaluation(staff, { discord_id: next.avaliado_id, role: 'allowlist', active: true }, next);
+      if (next.avaliado_id !== staff.discord_id) delete errors.avaliado_id;
+      if (Object.keys(errors).length) return validation(errors);
+      const { data: id, error, status } = await sb.rpc('registrar_avaliacao', {
+        p_avaliado_id: next.avaliado_id, p_periodo_inicio: next.periodo_inicio, p_periodo_fim: next.periodo_fim,
+        p_nota_geral: next.nota_geral, p_nota_presenca: next.nota_presenca, p_nota_qualidade: next.nota_qualidade,
+        p_nota_colaboracao: next.nota_colaboracao, p_nota_iniciativa: next.nota_iniciativa,
+        p_comentario: next.comentario || null, p_visivel_avaliado: next.visivel_avaliado,
+      });
+      if (error) return fieldFail(error, status, DIRETORIA_FIELDS);
+      const { data, error: e2, status: s2 } = await sb.from('diretoria_avaliacoes').select('*').eq('id', id).single();
+      if (e2) return failFrom(e2, s2);
+      await loadNames();
+      return ok(presentDirectorEvaluation(data));
+    },
+
+    async listOccurrences() {
+      const { error: g } = await guard('diretoria.ver');
+      if (g) return g;
+      const { data, error, status } = await sb.from('diretoria_ocorrencias').select('*').order('feito_em', { ascending: false });
+      if (error) return failFrom(error, status);
+      await loadNames();
+      return ok(data.map(presentOccurrence));
+    },
+
+    async saveOccurrence(input = {}) {
+      const { staff, error: g } = await guard('diretoria.ver');
+      if (g) return g;
+      const next = { membro_id: String(input?.membro_id ?? '').trim(), tipo: String(input?.tipo ?? ''), descricao: String(input?.descricao ?? '').trim() };
+      const errors = validateOccurrence(staff, { discord_id: next.membro_id, role: 'allowlist', active: true }, next);
+      if (next.membro_id !== staff.discord_id) delete errors.membro_id;
+      if (Object.keys(errors).length) return validation(errors);
+      const { data: id, error, status } = await sb.rpc('registrar_ocorrencia', { p_membro_id: next.membro_id, p_tipo: next.tipo, p_descricao: next.descricao });
+      if (error) return fieldFail(error, status, DIRETORIA_FIELDS);
+      const { data, error: e2, status: s2 } = await sb.from('diretoria_ocorrencias').select('*').eq('id', id).single();
+      if (e2) return failFrom(e2, s2);
+      await loadNames();
+      return ok(presentOccurrence(data));
+    },
+
+    async listRoleHistory({ memberId = '', limit = 25, offset = 0 } = {}) {
+      const { error: g } = await guard('diretoria.ver');
+      if (g) return g;
+      const size = Math.max(1, Math.min(Number(limit) || 25, 100));
+      const from = Math.max(0, Number(offset) || 0);
+      let q = sb.from('diretoria_historico_cargos').select('*', { count: 'exact' });
+      if (memberId) q = q.eq('membro_id', memberId);
+      const { data, error, status, count } = await q.order('feito_em', { ascending: false }).order('id', { ascending: false }).range(from, from + size - 1);
+      if (error) return failFrom(error, status);
+      await loadNames();
+      return ok({
+        items: data.map((x) => ({ ...x, feito_em: new Date(x.feito_em).toISOString(), membro_nome: nameOf(x.membro_id), feito_por_nome: nameOf(x.feito_por) })),
+        total: count ?? data.length,
+      });
+    },
+
+    async changeMemberRole(discordId, role, motivo = '') {
+      const { error: g } = await guard('equipe.gerenciar');
+      if (g) return g;
+      const why = reasonError(motivo);
+      if (why) return validation({ motivo: why });
+      const { error, status } = await sb.rpc('alterar_cargo_membro', { p_membro_id: String(discordId), p_cargo_novo: role, p_motivo: String(motivo ?? '').trim() || null });
+      if (error) return fieldFail(error, status, DIRETORIA_FIELDS);
+      const { data, error: e2, status: s2 } = await sb.from('staff_members').select(STAFF_COLUMNS).eq('discord_id', String(discordId)).maybeSingle();
+      if (e2) return failFrom(e2, s2);
+      return data ? ok(withTeams(data)) : fail('NOT_FOUND', DIRETORIA_ERRORS.member);
+    },
+
+    async getDiretoriaActivity({ from, to } = {}) {
+      const { error: g } = await guard('diretoria.ver');
+      if (g) return g;
+      if (!from || !to || !(Date.parse(to) > Date.parse(from))) return validation({ _: DIRETORIA_ERRORS.period400 });
+      const { data, error, status } = await sb.rpc('diretoria_atividades', { p_from: new Date(from).toISOString(), p_to: new Date(to).toISOString() });
+      if (error) return failFrom(error, status);
+      return ok((data ?? []).map((r) => ({ ...r, total: Number(r.total) })));
+    },
+
+    async getPromotionRules() {
+      const { error: g } = await guard('diretoria.ver');
+      if (g) return g;
+      const { data, error, status } = await sb.from('diretoria_textos').select('conteudo, atualizado_por, atualizado_em').eq('chave', 'regras_promocao').maybeSingle();
+      if (error) return failFrom(error, status);
+      await loadNames();
+      return ok({ conteudo: data?.conteudo ?? '', atualizado_por: data?.atualizado_por ?? null, atualizado_por_nome: nameOf(data?.atualizado_por), atualizado_em: data?.atualizado_em ?? null });
+    },
+
+    async savePromotionRules(conteudo) {
+      const { error: g } = await guard('diretoria.gerenciar');
+      if (g) return g;
+      const text = String(conteudo ?? '');
+      const e = promotionRulesError(text);
+      if (e) return validation({ conteudo: e });
+      const { data, error, status } = await sb.from('diretoria_textos').update({ conteudo: text }).eq('chave', 'regras_promocao')
+        .select('conteudo, atualizado_por, atualizado_em');
+      if (error) return fieldFail(error, status, DIRETORIA_FIELDS);
+      if (!data?.length) return fail('FORBIDDEN');
+      await loadNames();
+      return ok({ ...data[0], atualizado_por_nome: nameOf(data[0].atualizado_por) });
+    },
+
+    async getDirectorScore(discordId) {
+      const { error: g } = await guard();
+      if (g) return g;
+      const { data, error, status } = await sb.rpc('perfil_nota_diretoria', { p_discord_id: String(discordId) });
+      if (error) return failFrom(error, status);
+      return ok(data ? { media: Number(data.media), total: Number(data.total) } : null);
     },
 
     /* ----- Áreas da Staff (19_areas.sql) ----- */

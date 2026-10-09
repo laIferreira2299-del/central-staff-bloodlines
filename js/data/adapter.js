@@ -62,7 +62,7 @@
 //
 // Travas da equipe (js/core/permissions.js, staffChangeError): ninguém altera o próprio
 // cargo, as próprias equipes, nem se desativa ou se remove; quem não é CEO só gerencia e
-// só atribui cargos abaixo do próprio nível e nunca a Direção (Administrador, Manager,
+// só atribui cargos abaixo do próprio nível e nunca a Direção (Resp. Equipe, Administrador,
 // CEO); sempre sobra um CEO ativo. O discord_id não muda depois de criado.
 
 // Não-staff logado: listProcedures devolve [] (é o comportamento da RLS: o SELECT
@@ -352,6 +352,29 @@
  * @property {(patch: { bio?: string, banner_color?: string, perfil_publico?: boolean }) => Result<null>} updateMyProfile    Staff. Só o próprio perfil. VALIDATION por campo.
  * @property {(url: string) => Result<null>} syncMyAvatar    Staff. Guarda o avatar do Discord (só https://cdn.discordapp.com/...) para os outros verem. Melhor esforço.
  *
+ * Painel da Diretoria (21_diretoria.sql; regras em js/core/diretoria.js). Pessoas pelo Discord ID.
+ * @property {() => Result<object[]>} getDiretoriaMembers    diretoria.ver. Toda a equipe (ativos e inativos): { discord_id, display_name, role, teams,
+ *           active, created_at, avatar_url, areas: [{ nome, cor }], media (últimas 3 avaliações da Diretoria, ou null), avaliacoes, ultima_avaliacao,
+ *           ocorrencias, cargo_desde }. Do maior cargo para o menor.
+ * @property {() => Result<object[]>} listDirectorEvaluations    diretoria.ver. Avaliações da Diretoria, mais recentes primeiro, com avaliado_nome e avaliador_nome.
+ * @property {(e: object) => Result<object>} saveDirectorEvaluation    diretoria.ver. Cria (não edita). { avaliado_id, periodo_inicio, periodo_fim, nota_geral,
+ *           nota_presenca, nota_qualidade, nota_colaboracao, nota_iniciativa, comentario?, visivel_avaliado? }. Notas 0 a 10 de meio em meio; nunca a si
+ *           mesmo; só cargo abaixo (CEO: todos). VALIDATION por campo (DIRETORIA_ERRORS). Avaliador pelo servidor.
+ * @property {() => Result<object[]>} listOccurrences    diretoria.ver. Ocorrências, mais recentes primeiro, com membro_nome e feito_por_nome. O membro nunca vê.
+ * @property {(o: { membro_id: string, tipo: string, descricao: string }) => Result<object>} saveOccurrence    diretoria.ver. Mesma regra de alvo da avaliação.
+ * @property {(f?: { memberId?: string, limit?: number, offset?: number }) => Result<{ items: object[], total: number }>} listRoleHistory
+ *           diretoria.ver. Trocas de cargo (painel e tela Equipe), mais recentes primeiro: { id, membro_id, membro_nome, cargo_anterior, cargo_novo,
+ *           motivo, feito_por, feito_por_nome, feito_em }.
+ * @property {(discordId: string, role: string, motivo?: string) => Result<object>} changeMemberRole    equipe.gerenciar. Mesmas travas da tela Equipe
+ *           (STAFF_ERRORS); grava o motivo no histórico. Devolve o membro atualizado.
+ * @property {(p: { from: string, to: string }) => Result<Array<{ discord_id: string, tipo: string, semana: string, total: number }>>} getDiretoriaActivity
+ *           diretoria.ver. Atividades reais por pessoa, tipo (ACTIVITY_TYPES) e semana (segunda-feira AAAA-MM-DD, Brasília). to exclusivo; até 400 dias.
+ * @property {() => Result<{ conteudo: string, atualizado_por: string|null, atualizado_por_nome: string|null, atualizado_em: string|null }>} getPromotionRules
+ *           diretoria.ver. Texto das regras de promoção (Markdown).
+ * @property {(conteudo: string) => Result<object>} savePromotionRules    diretoria.gerenciar. Até 5000 caracteres, sem emoji.
+ * @property {(discordId: string) => Result<{ media: number, total: number }|null>} getDirectorScore    Staff. Média das últimas 3 avaliações da Diretoria
+ *           marcadas como visíveis. Só a própria pessoa e quem tem diretoria.ver; para os outros (ou sem avaliação), null.
+ *
  * Etapa 10 · produtividade (13_produtividade.sql; conta em js/core/productivity.js)
  * @property {(p: { from: string, to: string }) => Result<Productivity>} getProductivity   produtividade.ver. to exclusivo.
  * @property {() => Result<Array<{ discord_id: string, display_name: string }>>} listStaffNames   Staff: nomes de toda a equipe.
@@ -388,6 +411,8 @@ export const ADAPTER_METHODS = Object.freeze([
   'listRules', 'saveRule', 'deleteRule',
   'listMeetings', 'saveMeeting', 'deleteMeeting', 'checkMeetingConflict', 'startMeeting', 'endMeeting', 'announceMeeting', 'notifyMeeting',
   'getProfile', 'listProfileHistory', 'updateMyProfile', 'syncMyAvatar',
+  'getDiretoriaMembers', 'listDirectorEvaluations', 'saveDirectorEvaluation', 'listOccurrences', 'saveOccurrence', 'listRoleHistory',
+  'changeMemberRole', 'getDiretoriaActivity', 'getPromotionRules', 'savePromotionRules', 'getDirectorScore',
   'getProductivity', 'listStaffNames',
 ]);
 
@@ -453,7 +478,7 @@ export const WEBHOOK_COLUMNS = Object.freeze([
 ]);
 
 /** Módulos que o banco pode ter (Staff.features). */
-export const FEATURES = Object.freeze(['agenda', 'allowlist', 'areas', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos', 'discord_cargos', 'lore', 'perfil', 'produtividade', 'regras']);
+export const FEATURES = Object.freeze(['agenda', 'allowlist', 'areas', 'aprovacao', 'auditoria', 'avaliacoes', 'avisos', 'diretoria', 'discord_cargos', 'lore', 'perfil', 'produtividade', 'regras']);
 
 /** Campos que o cliente pode definir. Todo o resto é do servidor. */
 export const EDITABLE_FIELDS = Object.freeze([

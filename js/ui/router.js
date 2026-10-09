@@ -40,6 +40,8 @@ const ROUTES = [
   ['area', /^#\/areas\/([a-z0-9-]+)$/],
   // Perfil da staff
   ['perfil', /^#\/perfil(?:\/([0-9]{17,20}))?$/],
+  // Painel da Diretoria
+  ['diretoria', /^#\/diretoria$/],
 ];
 
 /** @returns {{ name: string, slug?: string, hash: string }} */

@@ -87,6 +87,7 @@ export function navGroups(app) {
           && { href: '#/avaliacoes-equipe', ico: 'star', label: 'Avaliações da equipe', count: c.evaluations, hint: 'Avaliações do Head Staff e caixa da Direção.' },
         app.feature('produtividade') && app.can('produtividade.ver') && { href: '#/controle', ico: 'chart-bar', label: 'Produtividade', hint: 'Quem mais lê allowlist e faz entrevista.' },
         app.feature('areas') && app.can('areas.gerenciar') && { href: '#/areas/gerenciar', ico: 'settings', label: 'Gerenciar Áreas', hint: 'Criar áreas, membros, tags e comunicados.' },
+        app.feature('diretoria') && app.can('diretoria.ver') && { href: '#/diretoria', ico: 'crown', label: 'Painel da Diretoria', hint: 'A equipe toda: avaliações, produtividade, ocorrências e cargos.' },
       ],
     },
     {

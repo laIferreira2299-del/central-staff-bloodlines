@@ -302,7 +302,7 @@ export function renderStaff(app) {
     h('header', { class: 'page-head' },
       h('h1', { class: 'page-title', tabindex: '-1' }, 'Equipe da staff'),
       h('p', { class: 'page-sub' }, manages
-        ? 'Quem pode entrar na Central e com qual cargo. Você gerencia os cargos abaixo do seu; Administradores, Managers e CEOs só o CEO gerencia.'
+        ? 'Quem pode entrar na Central e com qual cargo. Você gerencia os cargos abaixo do seu; Resp. Equipe, Administradores e CEOs só o CEO gerencia.'
         : 'Quem pode entrar na Central e com qual cargo.'),
       app.can('permissoes.editar') && h('p', { class: 'page-head-actions' },
         h('a', { class: 'btn btn--sm', href: '#/permissoes', id: 'staff-to-permissions' }, icon('shield-lock'), 'Permissões dos cargos'))),
